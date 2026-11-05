@@ -17,11 +17,11 @@ window.ARSHJUL_DATA = {
 
   // Oppgavetyper gir farge og filter
   types: {
-    frist:       { name: 'Frist',       color: '#BE312F' },
-    mote:        { name: 'Møte',        color: '#2F6FBE' },
-    arrangement: { name: 'Arrangement', color: '#7A3FB0' },
-    dugnad:      { name: 'Dugnad',      color: '#E08A00' },
-    rutine:      { name: 'Rutine',      color: '#00965E' }
+    frist:       { name: 'Frist',       color: '#F0504A' },
+    mote:        { name: 'Møte',        color: '#4C8DF6' },
+    arrangement: { name: 'Arrangement', color: '#A274F2' },
+    dugnad:      { name: 'Dugnad',      color: '#F5A524' },
+    rutine:      { name: 'Rutine',      color: '#22C383' }
   },
 
   /* Verv: hvem som har ansvaret. Oppgaver knyttes til verv, ikke til personer.
