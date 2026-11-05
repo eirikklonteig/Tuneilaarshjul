@@ -162,12 +162,18 @@
   }
 
   // ---------- Filtrering ----------
+  // Hvilke verv har ansvar i oppgaven: hovedansvarlig + egne verv på underoppgaver
+  function taskRoles(t) { return [t.role].concat((t.sub || []).map(s => s.role).filter(Boolean)); }
+  function subId(s, i) { return s.id || 's' + i; }
+  function subKey(o, s, i) { return `${o.key}~${subId(s, i)}`; }
   function matchesFilter(t) {
     if (!t.units.some(u => state.units.includes(u))) return false;
-    if (state.role === 'mine') return myRoleIds().includes(t.role);
-    if (state.role !== 'alle' && t.role !== state.role) return false;
+    if (state.role === 'mine') { const mine = myRoleIds(); return taskRoles(t).some(r => mine.includes(r)); }
+    if (state.role !== 'alle' && !taskRoles(t).includes(state.role)) return false;
     return true;
   }
+  // Verv som filteret gjelder (for å markere underoppgaver «til deg»)
+  function filterRoles() { return state.role === 'mine' ? myRoleIds() : state.role !== 'alle' ? [state.role] : []; }
   function isVisible(o) { return matchesFilter(o.t) && !(state.hideDone && done[o.key]); }
   function sortOcc(a, b) {
     const da = a.due ? a.due.getDate() : 32;
@@ -383,6 +389,9 @@
     const showUnits = !(t.units.length === 1 && t.units[0] === roleUnit);
     const unitsHtml = !showUnits ? '' : t.units.map(u => `<span class="unit-tag">${esc(unitById[u].short)}</span>`).join('');
     const subCount = t.sub ? t.sub.length : 0;
+    const subDone = subCount ? t.sub.filter((s, i) => done[subKey(o, s, i)]).length : 0;
+    const fr = filterRoles();
+    const subForYou = fr.length && !fr.includes(t.role) ? (t.sub || []).filter(s => s.role && fr.includes(s.role)).length : 0;
     const rep = t.repeat && REPEAT[t.repeat] && REPEAT[t.repeat].step ? `<span class="repeat-tag">↻ ${REPEAT[t.repeat].label.toLowerCase()}</span>` : '';
 
     let details = '';
@@ -395,11 +404,22 @@
       if (t.repeat && t.repeat !== 'yearly') details += `<p class="link-note">Gjentakelse: ${REPEAT[t.repeat].label.toLowerCase()}</p>`;
       if (t.description) details += `<p class="desc">${esc(t.description)}</p>`;
       if (t.sub && t.sub.length) {
-        details += '<h4>Underoppgaver</h4><ul class="subs">' + t.sub.map(s => {
+        details += '<h4>Underoppgaver</h4><ul class="subs">' + t.sub.map((s, i) => {
           const b = subBefore(s);
           const sd = b && o.due ? shiftBack(o.due, b.amount, b.unit) : null;
-          const when = b ? `<span class="sub-when">${amountText(b.amount, b.unit)} før${sd ? ' · ca. ' + fmtShort(sd) : ''}</span>` : '';
-          return `<li><span>${esc(s.title)}</span>${when}</li>`;
+          const key = subKey(o, s, i);
+          const sDone = !!done[key];
+          const whenTxt = b ? `${amountText(b.amount, b.unit)} før${sd ? ' · ca. ' + fmtShort(sd) : ''}` : '';
+          const own = s.role && s.role !== t.role;
+          const holders = own ? roleHolders(s.role) : [];
+          const who = own ? `${roleLabel(s.role)}${holders.length ? ' – ' + holders.join(', ') : ''}` : '';
+          const mark = fr.length && s.role && fr.includes(s.role) ? ' for-you' : '';
+          const by = sDone ? memberName(doneBy[key]) : '';
+          return `<li class="${sDone ? 'is-done' : ''}${mark}">
+            ${canTick() ? `<button type="button" class="sub-check" data-action="sub-done" data-task="${esc(key)}" data-tid="${esc(t.id)}" aria-pressed="${sDone}" aria-label="${sDone ? 'Fjern avkrysning' : 'Merk som gjort'}: ${esc(s.title)}">${CHECK_SVG}</button>` : ''}
+            <span class="sub-text"><span class="sub-title">${esc(s.title)}</span>
+              ${who || whenTxt || sDone ? `<span class="sub-when">${[esc(who), whenTxt, sDone ? '✓ gjort' + (by ? ' av ' + esc(by) : '') : ''].filter(Boolean).join(' · ')}</span>` : ''}</span>
+          </li>`;
         }).join('') + '</ul>';
       }
       const prepTarget = t.prepares && !(t.rel && t.rel.task === t.prepares) ? taskById[t.prepares] : null;
@@ -441,9 +461,10 @@
             <span class="role">${esc(roleLabel(t.role))}</span>
             ${badge(o)}
           </span>
-          ${unitsHtml || subCount || rep ? `<span class="task-meta">
+          ${unitsHtml || subCount || rep || subForYou ? `<span class="task-meta">
             ${unitsHtml}${rep}
-            ${subCount ? `<span class="sub-count">${subCount} ${subCount === 1 ? 'underoppgave' : 'underoppgaver'}</span>` : ''}
+            ${subCount ? `<span class="sub-count">${subDone ? subDone + '/' : ''}${subCount} ${subCount === 1 ? 'underoppgave' : 'underoppgaver'}${subDone ? ' gjort' : ''}</span>` : ''}
+            ${subForYou ? `<span class="badge for-you">${subForYou === 1 ? '1 underoppgave' : subForYou + ' underoppgaver'} til ${state.role === 'mine' ? 'deg' : 'vervet'}</span>` : ''}
           </span>` : ''}
         </span>
       </button>
@@ -806,15 +827,16 @@
       render();
     }
   }
-  async function setDone(key, on) {
+  async function setDone(key, on, taskId) {
     const o = occ.find(x => x.key === key);
-    if (!o) return;
+    taskId = taskId || (o && o.t.id);
+    if (!taskId) return;
     if (on) { done[key] = new Date().toISOString(); doneBy[key] = session && session.email; }
     else { delete done[key]; delete doneBy[key]; }
     render();
     if (mode() === 'local') { writeJSON(DONE_KEY, done); return; }
     try {
-      if (on) await rest('task_status', { method: 'POST', body: { season: D.season.label, task_key: key, task_id: o.t.id, status: 'done' }, prefer: 'resolution=merge-duplicates,return=minimal' });
+      if (on) await rest('task_status', { method: 'POST', body: { season: D.season.label, task_key: key, task_id: taskId, status: 'done' }, prefer: 'resolution=merge-duplicates,return=minimal' });
       else await rest(`task_status?season=eq.${SEASON_Q}&task_key=eq.${encodeURIComponent(key)}`, { method: 'DELETE', prefer: 'return=minimal' });
     } catch (err) {
       toast('Kunne ikke lagre avkrysningen: ' + err.message);
@@ -1507,7 +1529,7 @@
       month: due ? due.getMonth() + 1 : (t.month || seasonMonths[state.month].m),
       relTask: t.rel ? t.rel.task : '', relAmount: t.rel ? t.rel.amount : 2, relUnit: t.rel ? t.rel.unit : 'weeks',
       repeat: t.repeat || 'yearly',
-      sub: (t.sub || []).map(s => { const b = subBefore(s); return { title: s.title, amount: b ? b.amount : '', unit: b ? b.unit : 'days' }; }),
+      sub: (t.sub || []).map((s, i) => { const b = subBefore(s); return { id: subId(s, i), title: s.title, amount: b ? b.amount : '', unit: b ? b.unit : 'days', role: s.role || '' }; }),
       links: (t.links || []).map(l => ({ label: l.label || '', url: l.url || '' })),
       prepares: t.prepares || '', source: t.source || '', public: !!t.public
     };
@@ -1584,7 +1606,7 @@
         </div>
 
         <label class="field"><span>Ansvarlig verv</span>
-          <select data-field="role"><option value="">Velg verv …</option>${roleOptions()}</select></label>
+          <select data-field="role"><option value="">Velg verv …</option>${roleOptions(d.units)}</select></label>
 
         <fieldset class="form-block">
           <legend>Når</legend>
@@ -1601,13 +1623,17 @@
           <legend>Underoppgaver</legend>
           ${d.sub.map((s, i) => `<div class="sub-row">
             <input type="text" data-sub="${i}" data-key="title" value="${esc(s.title)}" placeholder="Underoppgave">
+            <select data-sub="${i}" data-key="role" class="sub-role" aria-label="Ansvarlig for underoppgaven">
+              <option value="">Ansvarlig: samme som hovedoppgaven</option>
+              ${roleOptions(d.units)}
+            </select>
             <div class="sub-when-row">
               <input type="number" min="0" max="365" inputmode="numeric" data-sub="${i}" data-key="amount" value="${esc(s.amount)}" placeholder="–" aria-label="Antall før">
               <select data-sub="${i}" data-key="unit">${Object.keys(UNIT_WORD).map(u => `<option value="${u}"${u === s.unit ? ' selected' : ''}>${UNIT_WORD[u][1]} før</option>`).join('')}</select>
               <button type="button" class="icon-btn small" data-action="f-sub-del" data-val="${i}" aria-label="Fjern underoppgave">${ico('close')}</button>
             </div></div>`).join('')}
           <button type="button" class="btn-add" data-action="f-sub-add">+ Underoppgave</button>
-          ${d.sub.length ? '<p class="hint">Antall før er valgfritt – f.eks. «4 uker før» hovedoppgavens frist.</p>' : ''}
+          ${d.sub.length ? '<p class="hint">Antall før er valgfritt – f.eks. «4 uker før» hovedoppgavens frist. Gi underoppgaven et annet verv hvis noen andre skal gjøre den – da får de den i «Mine verv» og i varslene sine, og kan krysse den av.</p>' : ''}
         </fieldset>
 
         <fieldset class="form-block">
@@ -1640,6 +1666,7 @@
       </form>`;
     const roleSel = document.querySelector('#task-form [data-field="role"]');
     if (roleSel) roleSel.value = d.role || '';
+    document.querySelectorAll('#task-form [data-sub][data-key="role"]').forEach(sel => { sel.value = d.sub[Number(sel.dataset.sub)].role || ''; });
   }
 
   // Les verdier fra feltene inn i utkastet (uten å tegne skjemaet på nytt)
@@ -1690,8 +1717,9 @@
     if (d.kind !== 'rel' && d.kind !== 'period' && d.repeat !== 'yearly') t.repeat = d.repeat;
     if (d.kind !== 'rel' && d.prepares) t.prepares = d.prepares;
     const subs = d.sub.filter(s => s.title.trim()).map(s => {
-      const o = { title: s.title.trim() };
+      const o = { id: s.id || ('s' + Math.random().toString(36).slice(2, 8)), title: s.title.trim() };
       if (s.amount !== '' && Number(s.amount) > 0) o.before = { amount: Number(s.amount), unit: s.unit };
+      if (s.role && s.role !== d.role) o.role = s.role;
       return o;
     });
     if (subs.length) t.sub = subs;
@@ -1789,7 +1817,7 @@
           draft.due = isoDate(new Date(sm.y, sm.m - 1, 1));
         }
       }
-      else if (a === 'f-sub-add') draft.sub.push({ title: '', amount: '', unit: 'weeks' });
+      else if (a === 'f-sub-add') draft.sub.push({ title: '', amount: '', unit: 'weeks', role: '' });
       else if (a === 'f-sub-del') draft.sub.splice(Number(val), 1);
       else if (a === 'f-link-add') draft.links.push({ label: '', url: '' });
       else if (a === 'f-link-del') draft.links.splice(Number(val), 1);
@@ -1824,6 +1852,9 @@
     } else if (a === 'done') {
       const key = el.dataset.task;
       if (canTick()) setDone(key, !done[key]);
+    } else if (a === 'sub-done') {
+      const key = el.dataset.task;
+      if (canTick()) setDone(key, !done[key], el.dataset.tid);
     } else if (a === 'import') {
       el.disabled = true; el.textContent = 'Legger inn …';
       importTasks(el.dataset.val);

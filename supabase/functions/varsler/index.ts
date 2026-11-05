@@ -99,7 +99,7 @@
     const n = o.due ? dayDiff(o.due, today) : null;
     const rel = n == null ? '' : n < 0 ? `${-n} ${-n === 1 ? 'dag' : 'dager'} siden` : n === 0 ? 'i dag' : n === 1 ? 'i morgen' : `om ${n} dager`;
     return `<tr><td style="padding:10px 0;border-bottom:1px solid #eef1ef">
-<div style="font-size:15px;font-weight:600"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${tp.color};margin-right:8px;vertical-align:middle"></span>${esc(o.t.title)}</div>
+<div style="font-size:15px;font-weight:600"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${tp.color};margin-right:8px;vertical-align:middle"></span>${esc(o.t.title)}${o.t.parentTitle ? `<span style="font-weight:400;color:#61706a"> – del av «${esc(o.t.parentTitle)}»</span>` : ''}</div>
 <div style="font-size:13px;color:#61706a;margin-top:3px;padding-left:16px">${esc(when)}${rel ? ' · ' + rel : ''} · ${esc(info.roleName(o.t.role))}</div></td></tr>`;
   }
   function section(title, color, rows) {
@@ -115,6 +115,27 @@
     return `Du får denne e-posten fordi du har ${roles ? 'vervet ' + esc(roles) : 'tilgang til årshjulet'}. Du kan skru av e-postene under ☰ → Varsler i <a href="${esc(info.appUrl)}" style="color:#00744a">årshjulet</a>.`;
   }
 
+  // Brukerens oppgaver: hovedoppgaver for vervet + underoppgaver som er gitt til vervet
+  function items(opts) {
+    const readable = opts.tasks.filter(t => t.units.some(u => opts.units.includes(u)));
+    const out = [];
+    expand(readable, opts.season).forEach(o => {
+      if (opts.roleIds.includes(o.t.role) && !opts.done[o.key]) out.push(o);
+      (o.t.sub || []).forEach((s, i) => {
+        if (!s.role || s.role === o.t.role || !opts.roleIds.includes(s.role)) return;
+        const key = `${o.key}~${s.id || 's' + i}`;
+        if (opts.done[key]) return;
+        const b = s.before ? (s.before.unit ? s.before : s.before.months ? { amount: s.before.months, unit: 'months' } : { amount: s.before.days, unit: 'days' }) : null;
+        out.push({
+          t: { id: o.t.id, title: s.title, parentTitle: o.t.title, type: o.t.type, role: s.role, description: '' },
+          idx: o.idx, month: o.month, key,
+          due: o.due ? (b ? shiftBack(o.due, b.amount, b.unit) : o.due) : null
+        });
+      });
+    });
+    return out;
+  }
+
   /* Lag e-poster for én bruker.
      opts: { member: {name}, roleIds: [...], units: [...lesbare enheter], tasks, done: {key: true},
              season: {label, startYear, startMonth}, today: Date, appUrl, remindDays: [7,1],
@@ -122,8 +143,7 @@
   function forMember(opts) {
     const today = new Date(opts.today); today.setHours(0, 0, 0, 0);
     const info = { appUrl: opts.appUrl, roleName: opts.roleName, memberRoles: opts.roleIds };
-    const mine = opts.tasks.filter(t => opts.roleIds.includes(t.role) && t.units.some(u => opts.units.includes(u)));
-    const occ = expand(mine, opts.season).filter(o => !opts.done[o.key]);
+    const occ = items(opts);
     const first = (opts.member.name || '').split(' ')[0];
 
     const late = occ.filter(o => o.due && dayDiff(o.due, today) < 0).sort((a, b) => a.due - b.due);
@@ -172,8 +192,7 @@ ${button(opts.appUrl, 'Åpne årshjulet')}
   // Neste oppgave med fast frist – brukes til å vise et eksempel på en påminnelse
   function sampleReminder(opts) {
     const today = new Date(opts.today); today.setHours(0, 0, 0, 0);
-    const mine = opts.tasks.filter(t => opts.roleIds.includes(t.role) && t.units.some(u => opts.units.includes(u)));
-    const o = expand(mine, opts.season).filter(x => x.due && !opts.done[x.key] && dayDiff(x.due, today) >= 0).sort((a, b) => a.due - b.due)[0];
+    const o = items(opts).filter(x => x.due && dayDiff(x.due, today) >= 0).sort((a, b) => a.due - b.due)[0];
     if (!o) return null;
     const days = (opts.remindDays && opts.remindDays[0]) || 7;
     const fakeToday = new Date(o.due); fakeToday.setDate(fakeToday.getDate() - days);
