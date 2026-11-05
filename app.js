@@ -1022,14 +1022,22 @@
   function inviteBox(id, highlight) {
     const inv = inviteFor(id);
     if (!inv) return '';
-    const mailto = `mailto:${inv.email}?subject=${encodeURIComponent(inv.subject)}&body=${encodeURIComponent(inv.body.replace(/\n/g, '\r\n'))}`;
+    const su = encodeURIComponent(inv.subject);
+    const body = encodeURIComponent(inv.body.replace(/\n/g, '\r\n'));
+    const to = encodeURIComponent(inv.email);
+    const mailto = `mailto:${inv.email}?subject=${su}&body=${body}`;
+    const outlook = `https://outlook.office.com/mail/deeplink/compose?to=${to}&subject=${su}&body=${body}`;
+    const gmail = `https://mail.google.com/mail/?view=cm&fs=1&to=${to}&su=${su}&body=${body}`;
     return `<div class="invite-box${highlight ? ' highlight' : ''}">
       <b>${highlight ? 'Send en invitasjon' : 'Invitasjon'}</b>
-      <p>Brukeren får ingen e-post automatisk. Send en invitasjon med lenke og forklaring – den går fra din egen e-post.</p>
+      <p>Brukeren får ingen e-post automatisk. Send en invitasjon med lenke og forklaring – den går fra din egen e-post. Velg der du har e-posten din:</p>
       <div class="invite-actions">
-        <a class="btn-primary" href="${mailto}">Send på e-post</a>
+        <a class="btn-primary" href="${outlook}" target="_blank" rel="noopener">Outlook (Microsoft 365)</a>
+        <a class="btn-secondary" href="${gmail}" target="_blank" rel="noopener">Gmail</a>
+        <a class="btn-secondary" href="${mailto}">E-postappen</a>
         <button type="button" class="btn-secondary" data-action="invite-copy" data-val="${esc(id)}">Kopier tekst</button>
       </div>
+      <p class="hint">Outlook og Gmail åpnes i nettleseren med kontoen du er logget inn med der. Sjekk at det er riktig konto (f.eks. Tune-adressen) før du sender. Etterpå ligger e-posten i Sendt-mappen.</p>
       <details class="invite-preview"><summary>Se teksten</summary><pre>${esc(inv.body)}</pre></details>
     </div>`;
   }
