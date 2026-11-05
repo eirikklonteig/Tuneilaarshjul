@@ -120,8 +120,12 @@
     const sel = document.getElementById('role-select');
     let html = '<option value="alle">Alle verv</option>';
     D.units.filter(u => state.units.includes(u.id)).forEach(u => {
-      const rs = D.roles.filter(r => r.unit === u.id);
-      if (rs.length) html += `<optgroup label="${esc(u.name)}">` + rs.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('') + '</optgroup>';
+      const opt = r => `<option value="${r.id}">${esc(r.name)}</option>`;
+      const styre = D.roles.filter(r => r.unit === u.id && r.styre !== false);
+      const andre = D.roles.filter(r => r.unit === u.id && r.styre === false);
+      const styreNavn = u.id === 'klubb' ? 'hovedstyret' : 'styret';
+      if (styre.length) html += `<optgroup label="${esc(u.name)} – ${styreNavn}">` + styre.map(opt).join('') + '</optgroup>';
+      if (andre.length) html += `<optgroup label="${esc(u.name)} – andre">` + andre.map(opt).join('') + '</optgroup>';
     });
     sel.innerHTML = html;
     if (state.role !== 'alle' && !state.units.includes(roleById[state.role].unit)) state.role = 'alle';

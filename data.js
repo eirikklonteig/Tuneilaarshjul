@@ -24,19 +24,37 @@ window.ARSHJUL_DATA = {
     rutine:      { name: 'Rutine',      color: '#00965E' }
   },
 
-  // Verv: hvem som har ansvaret. Oppgaver knyttes til verv, ikke til personer.
+  /* Verv: hvem som har ansvaret. Oppgaver knyttes til verv, ikke til personer.
+     Én person kan ha flere verv (f.eks. leder i håndball = håndballeder i hovedstyret).
+     styre: false = verv utenfor styret (f.eks. trener) */
   roles: [
-    { id: 'leder-klubb',  name: 'Leder',                 unit: 'klubb' },
-    { id: 'kasserer',     name: 'Kasserer',              unit: 'klubb' },
-    { id: 'politiattest', name: 'Politiattestansvarlig', unit: 'klubb' },
-    { id: 'valgkomite',   name: 'Valgkomiteen',          unit: 'klubb' },
-    { id: 'leder-hb',     name: 'Leder',                 unit: 'handball' },
-    { id: 'sportslig-hb', name: 'Sportslig leder',       unit: 'handball' },
-    { id: 'dugnad-hb',    name: 'Dugnadsansvarlig',      unit: 'handball' },
-    { id: 'dommer-hb',    name: 'Dommerkontakt',         unit: 'handball' },
-    { id: 'trener-hb',    name: 'Trener',                unit: 'handball' },
-    { id: 'leder-fb',     name: 'Leder',                 unit: 'fotball' },
-    { id: 'sportslig-fb', name: 'Sportslig leder',       unit: 'fotball' }
+    // Hovedstyret (klubb)
+    { id: 'leder-klubb',       name: 'Leder',                      unit: 'klubb' },
+    { id: 'nestleder-klubb',   name: 'Nestleder',                  unit: 'klubb' },
+    { id: 'handballeder',      name: 'Håndballeder',               unit: 'klubb' },
+    { id: 'fotballeder',       name: 'Fotballeder',                unit: 'klubb' },
+    { id: 'oldboys-leder',     name: 'Oldboys-leder',              unit: 'klubb' },
+    { id: 'youngboys-leder',   name: 'Youngboys-leder',            unit: 'klubb' },
+    { id: 'daglig-leder',      name: 'Daglig leder',               unit: 'klubb' },
+    { id: 'anleggsleder',      name: 'Anleggsleder',               unit: 'klubb' },
+    { id: 'kontrollkomite',    name: 'Leder kontrollkomiteen',     unit: 'klubb' },
+    // Håndballstyret
+    { id: 'leder-hb',          name: 'Leder',                      unit: 'handball' },
+    { id: 'nestleder-hb',      name: 'Nestleder',                  unit: 'handball' },
+    { id: 'okonomi-hb',        name: 'Økonomiansvarlig',           unit: 'handball' },
+    { id: 'kiosk-dugnad-hb',   name: 'Kiosk- og dugnadsansvarlig', unit: 'handball' },
+    { id: 'hall-materiell-hb', name: 'Hall- og materialansvarlig', unit: 'handball' },
+    { id: 'arrangement-hb',    name: 'Arrangementsansvarlig',      unit: 'handball' },
+    { id: 'sportslig-hb',      name: 'Sportslig leder',            unit: 'handball' },
+    { id: 'trener-hb',         name: 'Trener',                     unit: 'handball', styre: false },
+    // Fotballstyret
+    { id: 'leder-fb',          name: 'Leder',                      unit: 'fotball' },
+    { id: 'nestleder-fb',      name: 'Nestleder',                  unit: 'fotball' },
+    { id: 'okonomi-fb',        name: 'Økonomiansvarlig',           unit: 'fotball' },
+    { id: 'styremedlem1-fb',   name: 'Styremedlem 1',              unit: 'fotball' },
+    { id: 'styremedlem2-fb',   name: 'Styremedlem 2',              unit: 'fotball' },
+    { id: 'styremedlem3-fb',   name: 'Styremedlem 3',              unit: 'fotball' },
+    { id: 'styremedlem4-fb',   name: 'Styremedlem 4',              unit: 'fotball' }
   ],
 
   /* Oppgaver
@@ -49,9 +67,9 @@ window.ARSHJUL_DATA = {
     // August
     { id: 'trenermote-aug', title: 'Felles trener- og ledermøte', type: 'mote', units: ['handball'], role: 'sportslig-hb', month: 8,
       description: 'Oppstartsmøte for sesongen: sportsplan, treningstider, utstyr og forventninger.' },
-    { id: 'treningstider', title: 'Fordeling av treningstider', type: 'rutine', units: ['handball'], role: 'sportslig-hb', due: '2026-08-15',
+    { id: 'treningstider', title: 'Fordeling av treningstider', type: 'rutine', units: ['handball'], role: 'hall-materiell-hb', due: '2026-08-15',
       description: 'Fordel halltid mellom lagene og send oversikt til trenerne.' },
-    { id: 'politiattest', title: 'Kontroll av politiattester', type: 'rutine', units: ['klubb', 'handball', 'fotball'], role: 'politiattest', due: '2026-08-31',
+    { id: 'politiattest', title: 'Kontroll av politiattester', type: 'rutine', units: ['klubb', 'handball', 'fotball'], role: 'daglig-leder', due: '2026-08-31',
       description: 'Alle trenere og lagledere som jobber med barn under 18 år skal ha levert godkjent politiattest.',
       links: [{ label: 'Politiattest – Klubbguiden', url: 'https://www.idrettsforbundet.no/klubbguiden/politiattest/' }] },
     { id: 'sjekk-seriestart', title: 'Sjekkliste før seriestart', type: 'rutine', units: ['handball'], role: 'leder-hb', month: 9,
@@ -60,21 +78,21 @@ window.ARSHJUL_DATA = {
     // September
     { id: 'foreldremoter', title: 'Foreldremøte på alle lag', type: 'mote', units: ['handball'], role: 'trener-hb', month: 9,
       sub: [{ title: 'Klubbens verdier' }, { title: 'Foreldrevettregler' }, { title: 'Dugnad' }, { title: 'Økonomi og kontingent' }, { title: 'Sportsplan' }] },
-    { id: 'handballskole', title: 'Håndballskole for de minste', type: 'arrangement', units: ['handball'], role: 'sportslig-hb', month: 9 },
+    { id: 'handballskole', title: 'Håndballskole for de minste', type: 'arrangement', units: ['handball'], role: 'arrangement-hb', month: 9 },
 
     // Oktober
     { id: 'styremote-okt', title: 'Styremøte', type: 'mote', units: ['handball'], role: 'leder-hb', month: 10 },
-    { id: 'loddbok', title: 'Salg av loddbok', type: 'dugnad', units: ['klubb', 'handball', 'fotball'], role: 'dugnad-hb', due: '2026-10-15',
+    { id: 'loddbok', title: 'Salg av loddbok', type: 'dugnad', units: ['klubb', 'handball', 'fotball'], role: 'kiosk-dugnad-hb', due: '2026-10-15',
       description: 'Klubbdugnad. Loddbøkene deles ut til lagene, som selger innen fristen.' },
 
     // November
     { id: 'cup-pamelding', title: 'Påmelding til cup', type: 'frist', units: ['handball'], role: 'sportslig-hb', month: 11, dateTbd: true },
-    { id: 'loddbok-oppgjor', title: 'Oppgjør loddbøker', type: 'dugnad', units: ['klubb'], role: 'kasserer', due: '2026-11-30' },
+    { id: 'loddbok-oppgjor', title: 'Oppgjør loddbøker', type: 'dugnad', units: ['klubb'], role: 'daglig-leder', due: '2026-11-30' },
 
     // Desember
-    { id: 'moms-anlegg', title: 'Søknad om momskompensasjon for idrettsanlegg', type: 'frist', units: ['klubb'], role: 'kasserer', due: '2026-12-01',
+    { id: 'moms-anlegg', title: 'Søknad om momskompensasjon for idrettsanlegg', type: 'frist', units: ['klubb'], role: 'daglig-leder', due: '2026-12-01',
       links: [{ label: 'Momskompensasjon – Klubbguiden', url: 'https://www.idrettsforbundet.no/klubbguiden/' }] },
-    { id: 'juledugnad', title: 'Juledugnad', type: 'dugnad', units: ['handball'], role: 'dugnad-hb', month: 12 },
+    { id: 'juledugnad', title: 'Juledugnad', type: 'dugnad', units: ['handball'], role: 'kiosk-dugnad-hb', month: 12 },
 
     // Januar
     { id: 'idrettsreg', title: 'Idrettsregistrering', type: 'frist', units: ['klubb'], role: 'leder-klubb', month: 1, dateTbd: true,
@@ -94,24 +112,24 @@ window.ARSHJUL_DATA = {
         { title: 'Frist for innsending av forslag', before: { days: 14 } },
         { title: 'Sakliste og dokumenter gjøres tilgjengelig', before: { days: 7 } }
       ] },
-    { id: 'revisjon', title: 'Revisjon og kontrollutvalg', type: 'rutine', units: ['klubb'], role: 'kasserer', month: 3 },
+    { id: 'revisjon', title: 'Revisjon og kontrollutvalg', type: 'rutine', units: ['klubb'], role: 'kontrollkomite', month: 3 },
 
     // April
     { id: 'meld-antall-lag', title: 'Meld antall lag til sportslig leder', type: 'frist', units: ['handball'], role: 'trener-hb', due: '2027-04-15', prepares: 'lag-pamelding',
       description: 'Hver trener melder hvor mange lag årgangen trenger neste sesong, så sportslig leder kan melde på lagene.' },
-    { id: 'samordnet', title: 'Samordnet rapportering', type: 'frist', units: ['klubb'], role: 'kasserer', due: '2027-04-30' },
+    { id: 'samordnet', title: 'Samordnet rapportering', type: 'frist', units: ['klubb'], role: 'daglig-leder', due: '2027-04-30' },
     { id: 'nye-styremedl', title: 'Registrer nytt styre i SportsAdmin', type: 'rutine', units: ['klubb', 'handball'], role: 'leder-klubb', month: 4 },
 
     // Mai
     { id: 'lag-pamelding', title: 'Påmelding av lag til seriespill', type: 'frist', units: ['handball'], role: 'sportslig-hb', due: '2027-05-01',
       links: [{ label: 'SportsAdmin', url: 'https://sa.nif.no/' }] },
-    { id: 'dommer-pamelding', title: 'Påmelding av dommere', type: 'frist', units: ['handball'], role: 'dommer-hb', due: '2027-05-01' },
-    { id: 'fb-lag', title: 'Påmelding av lag (fotball) – eksempel', type: 'frist', units: ['fotball'], role: 'sportslig-fb', month: 5, dateTbd: true },
+    { id: 'dommer-pamelding', title: 'Påmelding av dommere', type: 'frist', units: ['handball'], role: 'sportslig-hb', due: '2027-05-01' },
+    { id: 'fb-lag', title: 'Påmelding av lag (fotball) – eksempel', type: 'frist', units: ['fotball'], role: 'leder-fb', month: 5, dateTbd: true },
 
     // Juni
     { id: 'evaluering', title: 'Evaluering av sesongen', type: 'mote', units: ['handball'], role: 'sportslig-hb', month: 6,
       sub: [{ title: 'Revider sportsplanen' }, { title: 'Kartlegg trenere og lagledere for neste sesong' }, { title: 'Sårbare årganger over sommeren' }] },
-    { id: 'dommerkontakt-sa', title: 'Registrer dommerkontakt i SportsAdmin', type: 'frist', units: ['handball'], role: 'dommer-hb', due: '2027-06-01' },
+    { id: 'dommerkontakt-sa', title: 'Registrer dommerkontakt i SportsAdmin', type: 'frist', units: ['handball'], role: 'sportslig-hb', due: '2027-06-01' },
     { id: 'fb-cup', title: 'Sommercup (fotball) – eksempel', type: 'arrangement', units: ['fotball'], role: 'leder-fb', month: 6 }
   ]
 };
