@@ -5,6 +5,6 @@
    ALDRI legg inn service_role-nøkkelen eller databasepassordet her.
    ========================================================= */
 window.ARSHJUL_CONFIG = {
-  supabaseUrl: '',   // f.eks. 'https://abcdefgh.supabase.co'
-  supabaseKey: ''    // f.eks. 'sb_publishable_…'
+  supabaseUrl: 'https://jbqwjjzqarrzkngdjqaj.supabase.co',
+  supabaseKey: 'sb_publishable_HB9-T7uQb93-0S5FjSmU_Q_8j6GEZDo'
 };
