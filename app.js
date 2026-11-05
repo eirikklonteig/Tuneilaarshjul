@@ -391,6 +391,188 @@
     if (state.view === 'hjul') { renderWheel(); renderMonth(); } else { renderList(); }
   }
 
+  // ---------- Lyst / mørkt tema ----------
+  const THEME_KEY = 'arshjul-tema';
+  const darkQuery = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : null;
+  function themePref() {
+    try { return localStorage.getItem(THEME_KEY) || 'lys'; } catch (e) { return 'lys'; }
+  }
+  function applyTheme() {
+    const p = themePref();
+    const dark = p === 'mork' || (p === 'auto' && darkQuery && darkQuery.matches);
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = dark ? '#133327' : '#e4f4ec';
+  }
+  if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => { applyTheme(); });
+
+  // ---------- Små meldinger ----------
+  let toastTimer = null;
+  function toast(msg) {
+    let el = document.querySelector('.toast');
+    if (!el) { el = document.createElement('div'); el.className = 'toast'; el.setAttribute('role', 'status'); document.body.appendChild(el); }
+    el.textContent = msg;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.remove(), 2600);
+  }
+
+  // ---------- Kalenderfil (.ics) ----------
+  function icsEscape(s) { return String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n'); }
+  function icsDate(d) { return d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0'); }
+  function downloadIcs() {
+    const list = D.tasks.filter(t => matchesFilter(t) && t.due);
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Tune IL//Arshjul//NO', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:Tune IL årshjul'];
+    list.forEach(t => {
+      const d = parseDate(t.due), end = new Date(d); end.setDate(end.getDate() + 1);
+      const desc = [roleLabel(t.role), t.description || ''].filter(Boolean).join('\n');
+      lines.push('BEGIN:VEVENT', `UID:${t.id}-${D.season.label.replace('/', '-')}@tune-arshjul`, `DTSTAMP:${stamp}`,
+        `DTSTART;VALUE=DATE:${icsDate(d)}`, `DTEND;VALUE=DATE:${icsDate(end)}`,
+        `SUMMARY:${icsEscape(t.title)}`, `DESCRIPTION:${icsEscape(desc)}`, 'TRANSP:TRANSPARENT', 'END:VEVENT');
+    });
+    lines.push('END:VCALENDAR');
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'tune-arshjul-' + D.season.label.replace('/', '-') + '.ics';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast(`${list.length} frister lagt i kalenderfilen`);
+  }
+
+  // ---------- «Mer»-panelet ----------
+  const ICONS = {
+    sun: '<path d="M12 4V2M12 22v-2M4 12H2M22 12h-2M5.6 5.6 4.2 4.2M19.8 19.8l-1.4-1.4M5.6 18.4l-1.4 1.4M19.8 4.2l-1.4 1.4"/><circle cx="12" cy="12" r="4"/>',
+    moon: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+    auto: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+    user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+    star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+    mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+    bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21h4"/>',
+    cal: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+    print: '<path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/>',
+    reset: '<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v6h6"/>',
+    users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/>',
+    tag: '<path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+    list: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
+    copy: '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
+    link: '<path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
+    close: '<path d="M6 6l12 12M18 6L6 18"/>'
+  };
+  function ico(name) { return `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; }
+  const CHEV = '<svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>';
+  function row(icon, title, sub, opts) {
+    opts = opts || {};
+    const tag = opts.action ? 'button' : 'div';
+    const attrs = opts.action ? ` type="button" data-action="${opts.action}"` : '';
+    const right = opts.soon ? `<span class="soon-pill">${opts.soon}</span>` : (opts.action ? CHEV : '');
+    return `<${tag} class="row${opts.danger ? ' danger' : ''}${opts.soon ? ' disabled' : ''}"${attrs}>
+      <span class="row-icon">${ico(icon)}</span>
+      <span class="row-text"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${right}</${tag}>`;
+  }
+  let resetArmed = false;
+
+  function renderMore() {
+    const p = themePref();
+    const nDone = Object.keys(done).length;
+    const themeBtn = (val, icon, label) => `<button type="button" data-action="theme" data-theme-val="${val}" class="${p === val ? 'on' : ''}" aria-pressed="${p === val}">${ico(icon)}${label}</button>`;
+    const guide = (q, body) => `<details><summary>${q}</summary><div class="guide-body">${body}</div></details>`;
+
+    document.getElementById('more-content').innerHTML = `
+      <div class="sheet-head">
+        <h2>Mer</h2>
+        <button type="button" class="icon-btn" data-action="close-more" aria-label="Lukk">${ico('close')}</button>
+      </div>
+
+      <section class="sheet-section">
+        <h3>Utseende</h3>
+        <div class="group">
+          <div class="segmented" role="group" aria-label="Tema">
+            ${themeBtn('lys', 'sun', 'Lys')}${themeBtn('mork', 'moon', 'Mørk')}${themeBtn('auto', 'auto', 'Automatisk')}
+          </div>
+        </div>
+      </section>
+
+      <section class="sheet-section">
+        <h3>Min profil</h3>
+        <div class="group">
+          ${row('user', 'Logg inn', 'Med kode på e-post – ingen passord å huske', { soon: 'Steg 2' })}
+          ${row('star', 'Mine verv og oppgaver', 'Start appen med bare dine oppgaver', { soon: 'Steg 3' })}
+        </div>
+      </section>
+
+      <section class="sheet-section">
+        <h3>Varsler</h3>
+        <div class="group">
+          ${row('mail', 'Ukentlig e-post', 'Dine frister de neste 30 dagene', { soon: 'Steg 4' })}
+          ${row('bell', 'Påminnelse før frist', 'For eksempel 7 dager før', { soon: 'Steg 4' })}
+          ${row('link', 'Abonner i kalenderen', 'Fristene oppdateres automatisk i Outlook, Google og iPhone', { soon: 'Steg 4' })}
+        </div>
+      </section>
+
+      <section class="sheet-section">
+        <h3>Data</h3>
+        <div class="group">
+          ${row('cal', 'Last ned kalenderfil', 'Fristene som passer filteret nå, som .ics-fil', { action: 'ics' })}
+          ${row('print', 'Skriv ut / lagre som PDF', 'Hele sesongen som liste', { action: 'print' })}
+          ${row('reset', resetArmed ? 'Trykk igjen for å nullstille' : 'Nullstill avkrysninger', nDone ? `${nDone} avkrysset på denne enheten` : 'Ingen avkrysninger ennå', { action: 'reset', danger: true })}
+        </div>
+      </section>
+
+      <section class="sheet-section">
+        <h3>Administrasjon</h3>
+        <div class="group">
+          ${row('users', 'Brukere og tilgang', 'Legg til brukere, gi admin- eller lesetilgang', { soon: 'Steg 2' })}
+          ${row('tag', 'Verv', 'Opprett, endre og fordel verv', { soon: 'Steg 2' })}
+          ${row('list', 'Oppgaver', 'Opprett og endre oppgaver, frister og lenker', { soon: 'Steg 3' })}
+          ${row('copy', 'Ny sesong', 'Kopier årshjulet – avkrysninger nullstilles', { soon: 'Steg 5' })}
+        </div>
+      </section>
+
+      <section class="sheet-section">
+        <h3>Brukerveiledning</h3>
+        <div class="group guide">
+          ${guide('Slik leser du hjulet', `<ul>
+            <li>Hjulet starter i august, som håndballsesongen.</li>
+            <li>Hver prikk er en oppgave. Fargen viser typen: frist, møte, arrangement, dugnad eller rutine.</li>
+            <li>Den røde streken viser hvor vi er i året i dag.</li>
+            <li>Ringen i midten fylles etter hvert som månedens oppgaver krysses av.</li></ul>`)}
+          ${guide('Bla mellom måneder', `<ul>
+            <li>Trykk på en måned i hjulet.</li>
+            <li>Dra fingeren (eller musa) rundt hjulet.</li>
+            <li>Rull med musehjulet, eller bruk pilene ved månedsnavnet.</li></ul>`)}
+          ${guide('Filtrer på klubb, gruppe og verv', `<p>Knappene <b>Tune IL</b>, <b>Håndball</b> og <b>Fotball</b> slås av og på – du kan se én, to eller alle. Velg et verv for å se bare de oppgavene vervet har ansvar for.</p>`)}
+          ${guide('Oppgavene', `<ul>
+            <li>Trykk på en oppgave for å se beskrivelse, underoppgaver, lenker og kilde.</li>
+            <li>Trykk på sirkelen til høyre for å krysse av.</li>
+            <li>Datoboksen: <b>30 NOV</b> = fast frist, <b>? NOV</b> = dato kommer, <b>– NOV</b> = i løpet av måneden.</li>
+            <li>«Forberedes av» viser oppgaver som må gjøres først, for eksempel at trenerne melder antall lag før lagene meldes på.</li></ul>`)}
+          ${guide('Neste frister', `<p>Øverst ser du de neste fristene og frister som har passert uten å bli krysset av. Trykk på et kort for å gå til oppgaven.</p>`)}
+        </div>
+      </section>
+
+      <section class="sheet-section">
+        <h3>Om</h3>
+        <div class="group about">
+          <div><b>Tune IL årshjul</b> · testversjon 0.4</div>
+          <div>Oppgavene er eksempler. Frister fra NHF Region Øst og NIF må sjekkes hver sesong.</div>
+          <div>Avkrysninger lagres foreløpig bare på denne enheten.</div>
+        </div>
+      </section>`;
+  }
+  function openMore() {
+    resetArmed = false;
+    renderMore();
+    const dlg = document.getElementById('more');
+    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
+  }
+  function closeMore() {
+    const dlg = document.getElementById('more');
+    if (dlg.close) dlg.close(); else dlg.removeAttribute('open');
+  }
+  // Klikk utenfor panelet lukker det
+  document.getElementById('more').addEventListener('click', e => { if (e.target.id === 'more') closeMore(); });
+
   // ---------- Hendelser ----------
   function setMonth(i) {
     state.month = (i + 12) % 12;
@@ -434,7 +616,18 @@
       saveState(); render();
       const card = document.getElementById('task-' + t.id);
       if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else if (a === 'more') openMore();
+    else if (a === 'close-more') closeMore();
+    else if (a === 'theme') {
+      try { localStorage.setItem(THEME_KEY, el.dataset.themeVal); } catch (err) { /* ignorer */ }
+      applyTheme(); renderMore();
+    } else if (a === 'ics') downloadIcs();
+    else if (a === 'reset') {
+      if (!resetArmed) { resetArmed = true; renderMore(); return; }
+      done = {}; writeJSON(DONE_KEY, done); resetArmed = false;
+      render(); renderMore(); toast('Avkrysningene er nullstilt');
     } else if (a === 'print') {
+      closeMore();
       const prev = state.view;
       state.view = 'liste'; state.open = null; render();
       setTimeout(() => { window.print(); state.view = prev; render(); }, 50);

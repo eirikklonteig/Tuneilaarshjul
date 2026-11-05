@@ -4,7 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Tune IL årshjul</title>
-  <meta name="theme-color" content="#0b2219">
+  <meta name="theme-color" content="#e4f4ec">
+  <script>
+    // Sett lyst/mørkt tema før siden tegnes, så den ikke blinker
+    (function () {
+      var p = 'lys';
+      try { p = localStorage.getItem('arshjul-tema') || 'lys'; } catch (e) {}
+      var dark = p === 'mork' || (p === 'auto' && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    })();
+  </script>
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,9 +31,14 @@
             <div class="brand-sub">Sesong <span id="season-label"></span> <span class="test-pill" title="Eksempeloppgaver. Avkrysninger lagres bare på denne enheten.">Test</span></div>
           </div>
         </div>
-        <div class="view-switch" role="tablist" aria-label="Visning">
-          <button type="button" data-action="view" data-view="hjul" role="tab">Hjul</button>
-          <button type="button" data-action="view" data-view="liste" role="tab">Liste</button>
+        <div class="hero-actions">
+          <div class="view-switch" role="tablist" aria-label="Visning">
+            <button type="button" data-action="view" data-view="hjul" role="tab">Hjul</button>
+            <button type="button" data-action="view" data-view="liste" role="tab">Liste</button>
+          </div>
+          <button type="button" class="more-btn" data-action="more" aria-label="Mer og innstillinger">
+            <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+          </button>
         </div>
       </div>
 
@@ -49,7 +63,6 @@
         <span class="toggle-track" aria-hidden="true"></span>
         <span>Skjul fullførte</span>
       </label>
-      <button type="button" class="btn-ghost" data-action="print">Skriv ut</button>
     </div>
   </section>
 
@@ -79,6 +92,10 @@
 
     <section id="view-liste" class="list-view" hidden></section>
   </main>
+
+  <dialog id="more" class="sheet" aria-label="Mer">
+    <div class="sheet-inner" id="more-content"></div>
+  </dialog>
 
   <script src="data.js"></script>
   <script src="app.js"></script>
