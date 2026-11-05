@@ -1,0 +1,209 @@
+/* =========================================================
+   Tune IL årshjul – utseende
+   Fargene samles her øverst (samme Tune-farger som Skuddkart).
+   ========================================================= */
+:root {
+  --green: #00965E;
+  --green-dark: #007a4c;
+  --green-soft: #e3f4ec;
+  --red: #BE312F;
+  --red-soft: #f8e6e5;
+  --amber: #a86400;
+  --amber-soft: #fbf0dc;
+
+  --bg: #f2f4f3;
+  --surface: #ffffff;
+  --surface-2: #eef1ef;
+  --surface-3: #e3e8e5;
+  --text: #121a16;
+  --muted: #5d6b64;
+  --border: #e3e8e5;
+
+  --radius: 16px;
+  --radius-sm: 12px;
+  --shadow: 0 1px 2px rgba(16, 26, 22, .04), 0 6px 20px rgba(16, 26, 22, .06);
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  padding-bottom: calc(24px + env(safe-area-inset-bottom));
+}
+h1, h2, h3, h4 { margin: 0; line-height: 1.2; letter-spacing: -.01em; font-weight: 600; }
+button, select, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+
+/* ---------- Toppfelt ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+  background: rgba(242, 244, 243, .86);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+  border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand-logo { width: 36px; height: 36px; flex: none; }
+.brand h1 { font-size: 1.05rem; }
+.brand-sub { font-size: .8rem; color: var(--muted); }
+
+.view-switch { display: flex; background: var(--surface-2); border-radius: 999px; padding: 3px; flex: none; }
+.view-switch button {
+  border: 0; background: none; padding: 6px 14px; border-radius: 999px; font-size: .9rem; color: var(--muted);
+}
+.view-switch button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.08); font-weight: 600; }
+
+.test-banner {
+  margin: 12px 16px 0; padding: 8px 12px; border-radius: var(--radius-sm);
+  background: var(--amber-soft); color: var(--amber); font-size: .82rem;
+}
+
+/* ---------- Filter ---------- */
+.filters { padding: 12px 16px 4px; display: grid; gap: 10px; max-width: 1180px; margin: 0 auto; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1.5px solid var(--border); background: var(--surface);
+  padding: 7px 14px 7px 10px; border-radius: 999px; font-size: .92rem; font-weight: 500;
+}
+.chip-check {
+  width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center;
+  border: 1.5px solid var(--surface-3); font-size: .7rem; color: #fff;
+}
+.chip.on { border-color: var(--green); background: var(--green-soft); color: var(--green-dark); }
+.chip.on .chip-check { background: var(--green); border-color: var(--green); }
+
+.filter-row { display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
+.select-wrap { display: inline-flex; align-items: center; gap: 8px; font-size: .9rem; color: var(--muted); }
+.select-wrap select {
+  border: 1px solid var(--border); background: var(--surface); border-radius: var(--radius-sm);
+  padding: 7px 10px; color: var(--text); max-width: 220px;
+}
+.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: .9rem; color: var(--muted); }
+.toggle input { accent-color: var(--green); width: 16px; height: 16px; }
+.btn-ghost {
+  margin-left: auto; border: 1px solid var(--border); background: var(--surface);
+  border-radius: 999px; padding: 6px 14px; font-size: .88rem;
+}
+.legend { display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: .78rem; color: var(--muted); }
+.legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.legend-item i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+/* ---------- Hjul-visning ---------- */
+main { max-width: 1180px; margin: 0 auto; padding: 8px 16px 0; }
+.hjul-layout { display: grid; gap: 16px; }
+@media (min-width: 900px) {
+  .hjul-layout { grid-template-columns: minmax(380px, 1fr) minmax(380px, 1fr); align-items: start; }
+  .wheel-card { position: sticky; top: 76px; }
+}
+.wheel-card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); padding: 12px; }
+#wheel { width: 100%; max-width: 520px; display: block; margin: 0 auto; user-select: none; }
+
+.seg { cursor: pointer; outline: none; }
+.seg-body { fill: var(--surface-2); transition: fill .15s; }
+.seg-rim { fill: var(--surface-3); transition: fill .15s; }
+.seg-label { font-size: 13px; font-weight: 600; fill: var(--muted); text-anchor: middle; dominant-baseline: central; letter-spacing: .04em; pointer-events: none; }
+.seg-more { font-size: 10px; font-weight: 700; fill: var(--muted); text-anchor: middle; dominant-baseline: central; }
+.seg:hover .seg-body { fill: var(--surface-3); }
+.seg:focus-visible .seg-body { stroke: var(--green); stroke-width: 2; }
+.seg.now .seg-label { fill: var(--text); }
+.seg.sel .seg-body { fill: var(--green-soft); }
+.seg.sel .seg-rim { fill: var(--green); }
+.seg.sel .seg-label { fill: #fff; }
+.dot { stroke: #fff; stroke-width: 1.5; pointer-events: none; }
+.dot.done { opacity: .28; }
+.now-hand { stroke: var(--red); stroke-width: 2; stroke-linecap: round; pointer-events: none; }
+.now-dot { fill: var(--red); stroke: #fff; stroke-width: 1.5; pointer-events: none; }
+.hub { fill: var(--surface); stroke: var(--border); stroke-width: 1; }
+.hub-season { font-size: 13px; fill: var(--muted); text-anchor: middle; dominant-baseline: central; }
+.hub-month { font-size: 24px; font-weight: 650; fill: var(--text); text-anchor: middle; dominant-baseline: central; text-transform: capitalize; }
+.hub-count { font-size: 12px; fill: var(--green-dark); text-anchor: middle; dominant-baseline: central; font-weight: 600; }
+
+.month-panel { min-width: 0; }
+.month-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.month-nav h2 { font-size: 1.35rem; text-transform: capitalize; text-align: center; flex: 1; }
+.icon-btn {
+  width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--border);
+  background: var(--surface); font-size: 1.4rem; line-height: 1; display: grid; place-items: center; padding-bottom: 3px;
+}
+
+/* ---------- Oppgavekort ---------- */
+.task-list { display: grid; gap: 10px; }
+.task {
+  display: flex; gap: 12px; align-items: flex-start;
+  background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 12px 14px 12px 12px; border-left: 4px solid var(--type);
+}
+.check {
+  flex: none; width: 28px; height: 28px; margin-top: 1px; border-radius: 50%;
+  border: 2px solid var(--surface-3); background: var(--surface); color: #fff; font-weight: 700; font-size: .85rem;
+  display: grid; place-items: center;
+}
+.check:hover { border-color: var(--green); }
+.task.is-done .check { background: var(--green); border-color: var(--green); }
+.task.is-done .task-title { text-decoration: line-through; color: var(--muted); }
+.task-main { flex: 1; min-width: 0; }
+.task-head { display: grid; gap: 4px; width: 100%; text-align: left; border: 0; background: none; padding: 0; }
+.task-title { font-weight: 600; font-size: 1rem; }
+.task-meta, .task-meta2 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: .82rem; }
+.type-pill { color: var(--type); font-weight: 600; }
+.due { color: var(--text); }
+.due.muted { color: var(--muted); }
+.due.tbd { color: var(--amber); background: var(--amber-soft); padding: 1px 8px; border-radius: 999px; font-weight: 500; }
+.due-soon { color: var(--amber); font-weight: 600; }
+.due-late { color: var(--red); font-weight: 600; }
+.role { color: var(--muted); }
+.unit-tag { background: var(--surface-2); color: var(--muted); padding: 1px 8px; border-radius: 999px; font-size: .76rem; }
+.sub-count { color: var(--muted); font-size: .78rem; }
+
+.task-details { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: .9rem; display: grid; gap: 10px; }
+.task-details p { margin: 0; }
+.task-details dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; }
+.task-details dt { color: var(--muted); }
+.task-details dd { margin: 0; }
+.task-details h4 { font-size: .85rem; color: var(--muted); font-weight: 600; }
+.subs { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.subs li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 10px; background: var(--surface-2); border-radius: 10px; }
+.sub-when { color: var(--muted); font-size: .8rem; white-space: nowrap; }
+.link-note { color: var(--muted); }
+.linklike { border: 0; background: none; padding: 0; color: var(--green-dark); font-weight: 600; text-decoration: underline; }
+.links { display: flex; flex-wrap: wrap; gap: 8px; }
+.links a { color: var(--green-dark); background: var(--green-soft); padding: 4px 10px; border-radius: 999px; text-decoration: none; font-size: .85rem; font-weight: 500; }
+.done-note { color: var(--green-dark); font-size: .82rem; }
+.empty { color: var(--muted); background: var(--surface); border-radius: var(--radius); padding: 18px; text-align: center; margin: 0; }
+
+/* ---------- Liste-visning ---------- */
+.list-view { display: grid; gap: 22px; padding-top: 4px; }
+.list-month h3 { font-size: 1.1rem; text-transform: capitalize; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.now-tag { text-transform: none; font-size: .72rem; background: var(--red); color: #fff; padding: 2px 8px; border-radius: 999px; }
+.print-title { display: none; }
+
+/* ---------- Mobil ---------- */
+@media (max-width: 520px) {
+  .brand h1 { font-size: .98rem; }
+  .btn-ghost { margin-left: 0; }
+  .select-wrap select { max-width: 170px; }
+}
+
+/* ---------- Utskrift / PDF ---------- */
+@media print {
+  body { background: #fff; padding: 0; }
+  .topbar, .test-banner, .filters, #view-hjul, .check { display: none !important; }
+  main { padding: 0; }
+  .print-title { display: block; font-size: 1.2rem; margin-bottom: 4px; }
+  .list-view { gap: 10px; }
+  .list-month { break-inside: avoid; }
+  .task { box-shadow: none; border: 1px solid #ddd; border-left: 4px solid var(--type); padding: 6px 10px; break-inside: avoid; }
+  .task-list { gap: 4px; }
+  .empty { padding: 4px; text-align: left; background: none; }
+}

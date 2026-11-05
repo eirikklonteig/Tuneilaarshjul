@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="no">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Tune IL årshjul</title>
+  <meta name="theme-color" content="#00965E">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="icon.svg" alt="" class="brand-logo">
+      <div>
+        <h1>Tune IL årshjul</h1>
+        <div class="brand-sub">Sesong <span id="season-label"></span></div>
+      </div>
+    </div>
+    <div class="view-switch" role="tablist" aria-label="Visning">
+      <button type="button" data-action="view" data-view="hjul" role="tab">Hjul</button>
+      <button type="button" data-action="view" data-view="liste" role="tab">Liste</button>
+    </div>
+  </header>
+
+  <div class="test-banner">Testversjon med eksempeloppgaver. Avkrysninger lagres bare på denne enheten.</div>
+
+  <section class="filters" aria-label="Filter">
+    <div class="chips" id="unit-chips"></div>
+    <div class="filter-row">
+      <label class="select-wrap">
+        <span>Verv</span>
+        <select id="role-select"></select>
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="hide-done">
+        <span>Skjul fullførte</span>
+      </label>
+      <button type="button" class="btn-ghost" data-action="print">Skriv ut</button>
+    </div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <main>
+    <section id="view-hjul" class="hjul-layout">
+      <div class="wheel-card">
+        <svg id="wheel" viewBox="-14 -14 428 428" role="group" aria-label="Årshjul"></svg>
+      </div>
+      <div class="month-panel">
+        <div class="month-nav">
+          <button type="button" class="icon-btn" data-action="prev" aria-label="Forrige måned">‹</button>
+          <h2 id="month-title"></h2>
+          <button type="button" class="icon-btn" data-action="next" aria-label="Neste måned">›</button>
+        </div>
+        <div id="month-tasks" class="task-list"></div>
+      </div>
+    </section>
+
+    <section id="view-liste" class="list-view" hidden></section>
+  </main>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
