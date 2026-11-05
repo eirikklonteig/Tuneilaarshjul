@@ -9,7 +9,7 @@
 1. ✅ Hjul + liste + filter med eksempeloppgaver, lyst/mørkt tema, Mer-meny, skjema for ny/redigert oppgave (lagres lokalt)
 2. ✅ Supabase: innlogging (kode på e-post), enheter, brukerregister, tilgang og verv
 3. ✅ Oppgaver og avkrysninger i databasen, velkomstside, offentlig lenke (?offentlig), knapper etter tilgang. Gjenstår: statuser, kommentarer, søk
-4. Kalenderlenke (iCal) og e-postpåminnelser *(venter)*
+4. Varsler på e-post (ukentlig + påminnelser) ferdig laget, IKKE slått på – se supabase/VARSLER.md. Kalenderabonnement senere.
 5. Klubb og fotball inn, maler, «kopier til neste sesong» (oppgaver nullstilles, datoer kan justeres), offentlig lenke
 
 ## Viktige valg

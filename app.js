@@ -6,7 +6,7 @@
   'use strict';
 
   const D = window.ARSHJUL_DATA;
-  const VERSION = '0.7';
+  const VERSION = '0.8';
   const MONTHS = ['januar', 'februar', 'mars', 'april', 'mai', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'desember'];
   const MONTHS_SHORT = ['JAN', 'FEB', 'MAR', 'APR', 'MAI', 'JUN', 'JUL', 'AUG', 'SEP', 'OKT', 'NOV', 'DES'];
   const WEEKDAYS = ['søndag', 'mandag', 'tirsdag', 'onsdag', 'torsdag', 'fredag', 'lørdag'];
@@ -720,6 +720,7 @@
       cloudError = '';
       applyCloudRoles();
       if (me) await loadTasks();
+      if (me) await loadNotifyPrefs();
     } catch (err) {
       cloudError = err.message;
     }
@@ -842,6 +843,7 @@
 
   function logoutLocal() {
     tasks = []; done = {}; doneBy = {}; tasksLoaded = false;
+    notify = null; notifyError = '';
     session = null; cloud = null;
     writeJSON(SESSION_KEY, null);
     D.roles = builtInRoles.slice();
@@ -988,6 +990,103 @@
       </div>
       <p class="hint pad-x">Admin kan legge til brukere og gi tilgang i enhetene de selv er admin for. Brukeren logger inn med e-postadressen sin.</p>`;
   }
+  // ---------- Varsler (forberedt – sendes først når de slås på) ----------
+  let notify = null;          // { weekly, days, active } eller null hvis databasen ikke er klar
+  let notifyError = '';
+  const previewState = { member: null, tab: 'weekly' };
+
+  async function loadNotifyPrefs() {
+    try {
+      const [rows, settings] = await Promise.all([
+        rest(`members?id=eq.${cloud.me.id}&select=notify_weekly,remind_days`),
+        rest('app_settings?key=eq.varsler&select=value')
+      ]);
+      const r = rows[0] || {};
+      notify = { weekly: r.notify_weekly !== false, days: (r.remind_days || []).slice(), active: !!(settings[0] && settings[0].value.aktiv) };
+      notifyError = '';
+    } catch (err) {
+      notify = null;
+      notifyError = /notify_weekly|app_settings|does not exist|schema cache/i.test(err.message) ? 'oppsett' : err.message;
+    }
+  }
+  async function saveNotifyPrefs(weekly, days) {
+    const before = notify;
+    notify = Object.assign({}, notify, { weekly, days: days.slice().sort((a, b) => b - a) });
+    renderMore();
+    try {
+      await rest('rpc/set_my_notifications', { method: 'POST', body: { weekly, days: notify.days } });
+      toast('Varselinnstillingene er lagret');
+    } catch (err) { notify = before; renderMore(); toast('Kunne ikke lagre: ' + err.message); }
+  }
+  function notifyHtml() {
+    if (mode() !== 'cloud') return `<div class="group">${row('mail', 'E-postvarsler', 'Ukentlig oversikt og påminnelser før frist – når du er logget inn', { soon: 'Logg inn' })}</div>`;
+    if (!notify) return `<div class="group">${row('mail', 'E-postvarsler', notifyError === 'oppsett'
+      ? 'Varsler er ikke lagt inn i databasen ennå (supabase/steg4-varsler.sql).' : 'Kunne ikke hente innstillingene: ' + esc(notifyError), { soon: 'Kommer' })}</div>`;
+    const hasRoles = myRoleIds().length > 0;
+    return `<div class="group">
+      ${notify.active ? '' : `<div class="notice">Varsler er <b>ikke slått på ennå</b>. Innstillingene dine lagres og brukes når de slås på. Se forhåndsvisningen for hvordan e-postene blir.</div>`}
+      ${hasRoles ? '' : `<div class="notice">Du har ingen verv ennå, så du får ingen varsler. En administrator kan gi deg verv.</div>`}
+      <button type="button" class="row" data-action="notify-weekly" role="switch" aria-checked="${notify.weekly}">
+        <span class="row-icon">${ico('mail')}</span>
+        <span class="row-text"><b>Ukentlig e-post</b><small>Hver mandag: dine frister de neste ${window.ArshjulVarsel ? ArshjulVarsel.UPCOMING_DAYS : 30} dagene og det som ikke er krysset av. Sendes bare når det er noe å vise.</small></span>
+        <span class="switch${notify.weekly ? ' on' : ''}" aria-hidden="true"></span>
+      </button>
+      <div class="row notify-days">
+        <span class="row-icon">${ico('bell')}</span>
+        <span class="row-text"><b>Påminnelse før frist</b><small>E-post til deg når en oppgave for vervet ditt nærmer seg fristen.</small>
+          <span class="day-chips">${[14, 7, 3, 1].map(d => `<button type="button" class="day-chip${notify.days.includes(d) ? ' on' : ''}" data-action="notify-day" data-val="${d}" aria-pressed="${notify.days.includes(d)}">${d === 1 ? '1 dag' : d + ' dager'} før</button>`).join('')}</span>
+        </span>
+      </div>
+      ${row('star', 'Forhåndsvis e-postene', 'Se hvordan den ukentlige e-posten og en påminnelse vil se ut for deg', { action: 'preview-mail' })}
+      ${row('link', 'Abonner i kalenderen', 'Fristene dine i Outlook, Google eller iPhone-kalenderen', { soon: 'Senere' })}
+    </div>`;
+  }
+
+  // Forhåndsvisning: samme innhold som sendejobben lager
+  function previewFor(memberId, tab) {
+    const m = cloud.members.find(x => x.id === memberId);
+    const roleIds = memberRoleIds(memberId);
+    const units = m.is_superadmin ? D.units.map(u => u.id) : memberAccess(memberId).map(a => a.unit_id);
+    const days = memberId === cloud.me.id && notify ? notify.days : [7, 1];
+    const opts = {
+      member: m, roleIds, units, tasks, done: Object.fromEntries(Object.keys(done).map(k => [k, true])),
+      season: D.season, today, appUrl: appUrl(), remindDays: days.length ? days : [7], roleName: roleLabel
+    };
+    if (tab === 'weekly') {
+      const r = ArshjulVarsel.forMember(opts);
+      return r.weekly ? { subject: r.weekly.subject, html: r.weekly.html } : { empty: roleIds.length ? 'Ingen frister de neste 30 dagene og ingenting forfalt – da sendes ingen e-post denne uka.' : 'Denne brukeren har ingen verv, og får derfor ingen varsler.' };
+    }
+    const s = ArshjulVarsel.sampleReminder(opts);
+    return s ? { subject: s.subject, html: s.html, note: 'Eksempel: den neste oppgaven med fast frist for vervet.' } : { empty: 'Ingen kommende oppgaver med fast frist for vervet – ingen påminnelse å vise.' };
+  }
+  function openPreview(memberId, tab) {
+    previewState.member = memberId; previewState.tab = tab;
+    const p = previewFor(memberId, tab);
+    const others = isAnyAdmin() ? cloud.members.filter(m => m.active && memberRoleIds(m.id).length) : [];
+    document.getElementById('preview-content').innerHTML = `
+      <div class="sheet-head">
+        <h2>Forhåndsvisning</h2>
+        <button type="button" class="icon-btn" data-action="close-preview" aria-label="Lukk">${ico('close')}</button>
+      </div>
+      ${others.length > 1 ? `<label class="field"><span>Vis for</span><select id="preview-member">${others.map(m => `<option value="${m.id}"${m.id === memberId ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}</select></label>` : ''}
+      <div class="seg-tabs" role="group" aria-label="Type e-post">
+        <button type="button" class="${tab === 'weekly' ? 'on' : ''}" data-action="preview-tab" data-val="weekly">Ukentlig e-post</button>
+        <button type="button" class="${tab === 'reminder' ? 'on' : ''}" data-action="preview-tab" data-val="reminder">Påminnelse</button>
+      </div>
+      ${p.empty ? `<p class="empty">${esc(p.empty)}</p>` : `
+        <p class="preview-subject"><span>Emne:</span> ${esc(p.subject)}</p>
+        ${p.note ? `<p class="hint">${esc(p.note)}</p>` : ''}
+        <iframe class="mail-frame" title="Forhåndsvisning av e-post" sandbox=""></iframe>`}
+      ${notify && !notify.active ? '<p class="hint">Varsler er ikke slått på – ingenting blir sendt ennå.</p>' : ''}`;
+    const frame = document.querySelector('#preview .mail-frame');
+    if (frame) frame.srcdoc = p.html;
+    openDialog('preview');
+  }
+  document.getElementById('preview').addEventListener('change', e => {
+    if (e.target.id === 'preview-member') openPreview(e.target.value, previewState.tab);
+  });
+  document.getElementById('preview').addEventListener('click', e => { if (e.target.id === 'preview') closeDialog('preview'); });
+
   // ---------- Invitasjon ----------
   // Appen sender ingen e-post selv: vi lager en ferdig tekst som admin sender fra sin egen e-post.
   function appUrl() { return location.origin + location.pathname.replace(/index\.html$/, ''); }
@@ -1256,6 +1355,15 @@
     if (a === 'user-save') { saveUser(); return true; }
     if (a === 'user-delete') { deleteUser(); return true; }
     if (a === 'role-add') { addRole(el.dataset.unit); return true; }
+    if (a === 'notify-weekly') { saveNotifyPrefs(!notify.weekly, notify.days); return true; }
+    if (a === 'notify-day') {
+      const d = Number(val);
+      saveNotifyPrefs(notify.weekly, notify.days.includes(d) ? notify.days.filter(x => x !== d) : notify.days.concat(d));
+      return true;
+    }
+    if (a === 'preview-mail') { openPreview(cloud.me.id, 'weekly'); return true; }
+    if (a === 'preview-tab') { openPreview(previewState.member, val); return true; }
+    if (a === 'close-preview') { closeDialog('preview'); return true; }
     if (a === 'invite-copy') {
       const inv = inviteFor(val);
       if (!inv) return true;
@@ -1302,11 +1410,7 @@
 
       <section class="sheet-section">
         <h3>Varsler</h3>
-        <div class="group">
-          ${row('mail', 'Ukentlig e-post', 'Dine frister de neste 30 dagene – du velger selv om du vil ha den', { soon: 'Steg 4' })}
-          ${row('bell', 'Påminnelse og purring', 'Før fristen, og når en frist har passert uten avkrysning', { soon: 'Steg 4' })}
-          ${row('link', 'Abonner i kalenderen', 'Fristene oppdateres automatisk i Outlook, Google og iPhone', { soon: 'Steg 4' })}
-        </div>
+        ${notifyHtml()}
       </section>
 
       <section class="sheet-section">
