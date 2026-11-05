@@ -988,6 +988,52 @@
       </div>
       <p class="hint pad-x">Admin kan legge til brukere og gi tilgang i enhetene de selv er admin for. Brukeren logger inn med e-postadressen sin.</p>`;
   }
+  // ---------- Invitasjon ----------
+  // Appen sender ingen e-post selv: vi lager en ferdig tekst som admin sender fra sin egen e-post.
+  function appUrl() { return location.origin + location.pathname.replace(/index\.html$/, ''); }
+  function inviteFor(id) {
+    const m = cloud.members.find(x => x.id === id);
+    if (!m) return null;
+    const first = m.name.split(' ')[0];
+    const acc = m.is_superadmin ? ['Hovedadmin (full tilgang)'] : memberAccess(id).map(a => `${unitName(a.unit_id)}: ${LEVELS[a.level]}`);
+    const roles = memberRoleIds(id).map(r => roleById[r]).filter(Boolean).map(r => `${r.name} (${unitName(r.unit)})`);
+    const lines = [
+      `Hei ${first}!`,
+      '',
+      'Du er lagt til i Tune IL årshjul – klubbens oversikt over faste oppgaver og frister gjennom sesongen, og hvem som har ansvaret.',
+      '',
+      `Tilgang: ${acc.join(', ') || 'kommer'}`
+    ];
+    if (roles.length) lines.push(`Verv: ${roles.join(', ')}`);
+    lines.push(
+      '',
+      'Slik logger du inn:',
+      `1. Gå til ${appUrl()}`,
+      `2. Trykk «Logg inn» og skriv inn e-postadressen din: ${m.email}`,
+      '3. Du får en kode på e-post (sjekk søppelpost hvis den ikke kommer). Skriv inn koden – du trenger ikke passord.',
+      '',
+      'Tips: Legg siden til på hjemskjermen på mobilen, så har du årshjulet lett tilgjengelig.',
+      '',
+      'Hilsen',
+      cloud.me ? cloud.me.name : 'Tune IL'
+    );
+    return { email: m.email, subject: 'Du er lagt til i Tune IL årshjul', body: lines.join('\n') };
+  }
+  function inviteBox(id, highlight) {
+    const inv = inviteFor(id);
+    if (!inv) return '';
+    const mailto = `mailto:${inv.email}?subject=${encodeURIComponent(inv.subject)}&body=${encodeURIComponent(inv.body.replace(/\n/g, '\r\n'))}`;
+    return `<div class="invite-box${highlight ? ' highlight' : ''}">
+      <b>${highlight ? 'Send en invitasjon' : 'Invitasjon'}</b>
+      <p>Brukeren får ingen e-post automatisk. Send en invitasjon med lenke og forklaring – den går fra din egen e-post.</p>
+      <div class="invite-actions">
+        <a class="btn-primary" href="${mailto}">Send på e-post</a>
+        <button type="button" class="btn-secondary" data-action="invite-copy" data-val="${esc(id)}">Kopier tekst</button>
+      </div>
+      <details class="invite-preview"><summary>Se teksten</summary><pre>${esc(inv.body)}</pre></details>
+    </div>`;
+  }
+
   function openUser(id) {
     const m = id ? cloud.members.find(x => x.id === id) : null;
     const access = {};
@@ -1031,6 +1077,7 @@
         ${isSuper() ? `<label class="toggle"><input type="checkbox" id="u-super"${d.is_superadmin ? ' checked' : ''}><span class="toggle-track" aria-hidden="true"></span><span>Hovedadmin (full tilgang til alt)</span></label>` : ''}
         ${isSuper() && d.id ? `<label class="toggle"><input type="checkbox" id="u-active"${d.active ? ' checked' : ''}><span class="toggle-track" aria-hidden="true"></span><span>Aktiv (kan logge inn)</span></label>` : ''}
         ${d.msg ? `<p class="form-error" role="alert">${esc(d.msg)}</p>` : ''}
+        ${d.id ? inviteBox(d.id, d.justCreated) : ''}
         <div class="form-actions">
           ${isSuper() && d.id && d.id !== cloud.me.id ? `<button type="button" class="btn-danger" data-action="user-delete">${d.armed ? 'Trykk igjen for å slette' : 'Slett bruker'}</button>` : '<span></span>'}
           <div class="form-actions-right">
@@ -1090,8 +1137,16 @@
         else await rest(`member_roles?member_id=eq.${id}&role_id=eq.${encodeURIComponent(r.id)}`, { method: 'DELETE', prefer: 'return=minimal' });
       }
       await loadCloud();
-      toast(d.id ? 'Brukeren er lagret' : `${name} er lagt til`);
-      moreView = 'users'; renderMore();
+      if (d.id) { toast('Brukeren er lagret'); moreView = 'users'; renderMore(); }
+      else {
+        // Ny bruker: vis invitasjonen med en gang
+        toast(`${name} er lagt til – send en invitasjon`);
+        openUser(id);
+        userDraft.justCreated = true;
+        renderUserEdit();
+        const box = document.querySelector('.invite-box');
+        if (box) box.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
     } catch (err) { fail(err.message); }
   }
   async function deleteUser() {
@@ -1203,6 +1258,14 @@
     if (a === 'user-save') { saveUser(); return true; }
     if (a === 'user-delete') { deleteUser(); return true; }
     if (a === 'role-add') { addRole(el.dataset.unit); return true; }
+    if (a === 'invite-copy') {
+      const inv = inviteFor(val);
+      if (!inv) return true;
+      const text = `${inv.subject}\n\n${inv.body}`;
+      (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject())
+        .then(() => toast('Teksten er kopiert – lim den inn i SMS, Spond eller e-post'), () => toast('Kunne ikke kopiere – åpne «Se teksten» og kopier selv'));
+      return true;
+    }
     return false;
   }
 

@@ -617,6 +617,15 @@ body[data-mode="cloud"] .pill-test { display: none; }
 .form-toggle small { color: var(--muted); font-size: .78rem; font-weight: 400; }
 .opt-chip:disabled { opacity: .4; cursor: not-allowed; }
 
+/* ---------- Invitasjon ---------- */
+.invite-box { border: 1px solid var(--border); background: var(--surface); border-radius: var(--radius); padding: 14px; display: grid; gap: 8px; }
+.invite-box.highlight { border-color: var(--green); background: var(--accent-soft); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 15%, transparent); }
+.invite-box p { margin: 0; color: var(--muted); font-size: .86rem; }
+.invite-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.invite-actions a.btn-primary { text-decoration: none; display: inline-flex; align-items: center; }
+.invite-preview summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: .84rem; }
+.invite-preview pre { white-space: pre-wrap; font-family: inherit; font-size: .82rem; color: var(--muted); background: var(--surface-2); border-radius: 10px; padding: 10px 12px; margin: 8px 0 0; }
+
 /* ---------- Mobil ---------- */
 @media (max-width: 560px) {
   .brand h1 { font-size: 1.05rem; }
