@@ -255,7 +255,11 @@
       if (t.links) {
         details += '<div class="links">' + t.links.map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)} ↗</a>`).join('') + '</div>';
       }
-      if (isDone) details += `<p class="done-note">Krysset av ${fmtDate(new Date(done[t.id]))}</p>`;
+      if (t.source && D.sources && D.sources[t.source]) {
+        const s = D.sources[t.source];
+        details += `<p class="source-note">Kilde: <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a></p>`;
+      }
+      if (isDone) details +=`<p class="done-note">Krysset av ${fmtDate(new Date(done[t.id]))}</p>`;
       details += '</div>';
     }
 
@@ -371,6 +375,68 @@
       if (e.key === 'ArrowRight') setMonth(state.month + 1);
     }
   });
+
+  // ---------- Rulle på hjulet ----------
+  // Dra rundt den ytre ringen (finger eller mus), eller bruk musehjulet.
+  const wheelEl = document.getElementById('wheel');
+  function svgPoint(clientX, clientY) {
+    const m = wheelEl.getScreenCTM();
+    if (!m) return null;
+    const p = new DOMPoint(clientX, clientY).matrixTransform(m.inverse());
+    return { x: p.x - C, y: p.y - C };
+  }
+  function onRing(p) { return p && Math.hypot(p.x, p.y) >= R_IN; }
+  function monthAt(p) {
+    let deg = Math.atan2(p.x, -p.y) * 180 / Math.PI;
+    if (deg < 0) deg += 360;
+    return Math.floor(deg / 30) % 12;
+  }
+  let dragging = false;
+  function dragTo(clientX, clientY) {
+    const p = svgPoint(clientX, clientY);
+    if (!p) return;
+    const i = monthAt(p);
+    if (i !== state.month) { state.month = i; state.open = null; render(); }
+  }
+
+  // Mus (PC)
+  wheelEl.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'touch') return;
+    if (!onRing(svgPoint(e.clientX, e.clientY))) return;
+    dragging = true;
+    wheelEl.classList.add('dragging');
+    dragTo(e.clientX, e.clientY);
+  });
+  window.addEventListener('pointermove', e => { if (dragging && e.pointerType !== 'touch') dragTo(e.clientX, e.clientY); });
+  window.addEventListener('pointerup', () => { dragging = false; wheelEl.classList.remove('dragging'); });
+
+  // Finger (mobil): bare når fingeren starter på hjulet, ellers scroller siden som vanlig
+  wheelEl.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    if (e.touches.length !== 1 || !onRing(svgPoint(t.clientX, t.clientY))) return;
+    dragging = true;
+    wheelEl.classList.add('dragging');
+  }, { passive: true });
+  wheelEl.addEventListener('touchmove', e => {
+    if (!dragging) return;
+    e.preventDefault();
+    const t = e.touches[0];
+    dragTo(t.clientX, t.clientY);
+  }, { passive: false });
+  wheelEl.addEventListener('touchend', () => { dragging = false; wheelEl.classList.remove('dragging'); });
+
+  // Musehjul / styreflate
+  let wheelAcc = 0, wheelTimer = null;
+  wheelEl.addEventListener('wheel', e => {
+    e.preventDefault();
+    wheelAcc += Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+    if (Math.abs(wheelAcc) >= 60) {
+      setMonth(state.month + (wheelAcc > 0 ? 1 : -1));
+      wheelAcc = 0;
+    }
+    clearTimeout(wheelTimer);
+    wheelTimer = setTimeout(() => { wheelAcc = 0; }, 200);
+  }, { passive: false });
 
   document.getElementById('role-select').addEventListener('change', e => {
     state.role = e.target.value; saveState(); render();

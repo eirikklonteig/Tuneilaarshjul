@@ -109,6 +109,10 @@ main { max-width: 1180px; margin: 0 auto; padding: 8px 16px 0; }
 .wheel-card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); padding: 12px; }
 #wheel { width: 100%; max-width: 520px; display: block; margin: 0 auto; user-select: none; }
 
+#wheel.dragging, #wheel.dragging .seg { cursor: grabbing; }
+.wheel-hint { margin: 6px 0 2px; text-align: center; font-size: .78rem; color: var(--muted); }
+.source-note { font-size: .8rem; color: var(--muted); }
+.source-note a { color: var(--muted); }
 .seg { cursor: pointer; outline: none; }
 .seg-body { fill: var(--surface-2); transition: fill .15s; }
 .seg-rim { fill: var(--surface-3); transition: fill .15s; }
