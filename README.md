@@ -7,8 +7,8 @@
 
 ## Plan
 1. ✅ Hjul + liste + filter med eksempeloppgaver, lyst/mørkt tema, Mer-meny, skjema for ny/redigert oppgave (lagres lokalt)
-2. Supabase: innlogging (kode på e-post), enheter, brukerregister, tilgang og verv
-3. Oppgaver i databasen (skjemaet finnes allerede lokalt): avkrysning per sesong, statuser, kommentarer, søk, «mine oppgaver», admin kan lage nye verv
+2. ✅ Supabase: innlogging (kode på e-post), enheter, brukerregister, tilgang og verv
+3. ✅ Oppgaver og avkrysninger i databasen, velkomstside, offentlig lenke (?offentlig), knapper etter tilgang. Gjenstår: statuser, kommentarer, søk
 4. Kalenderlenke (iCal) og e-postpåminnelser *(venter)*
 5. Klubb og fotball inn, maler, «kopier til neste sesong» (oppgaver nullstilles, datoer kan justeres), offentlig lenke
 

@@ -28,7 +28,7 @@
           <img src="icon.svg" alt="" class="brand-logo">
           <div>
             <h1>Tune IL årshjul</h1>
-            <div class="brand-sub">Sesong <span id="season-label"></span> <span class="test-pill" title="Eksempeloppgaver. Avkrysninger lagres bare på denne enheten.">Test</span></div>
+            <div class="brand-sub">Sesong <span id="season-label"></span> <span class="test-pill pill-test">Test</span><span class="test-pill pill-public">Offentlig</span></div>
           </div>
         </div>
         <div class="hero-actions">
@@ -36,6 +36,7 @@
             <button type="button" data-action="view" data-view="hjul" role="tab">Hjul</button>
             <button type="button" data-action="view" data-view="liste" role="tab">Liste</button>
           </div>
+          <a class="login-pill" href="./">Logg inn</a>
           <button type="button" class="more-btn" data-action="more" aria-label="Mer og innstillinger">
             <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
           </button>
@@ -88,6 +89,7 @@
         </div>
         <div id="month-tasks" class="task-list"></div>
       </div>
+      <div id="gate" class="gate"></div>
     </section>
 
     <section id="view-liste" class="list-view" hidden></section>

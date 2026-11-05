@@ -6,7 +6,7 @@
   'use strict';
 
   const D = window.ARSHJUL_DATA;
-  const VERSION = '0.6';
+  const VERSION = '0.7';
   const MONTHS = ['januar', 'februar', 'mars', 'april', 'mai', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'desember'];
   const MONTHS_SHORT = ['JAN', 'FEB', 'MAR', 'APR', 'MAI', 'JUN', 'JUL', 'AUG', 'SEP', 'OKT', 'NOV', 'DES'];
   const WEEKDAYS = ['søndag', 'mandag', 'tirsdag', 'onsdag', 'torsdag', 'fredag', 'lørdag'];
@@ -68,14 +68,17 @@
     open: null
   };
   let done = readJSON(DONE_KEY, {});
+  let doneBy = {};          // hvem som krysset av (e-post), fra databasen
+  let tasksLoaded = false;  // er oppgavene hentet fra databasen?
+  const PUBLIC = /[?&]offentlig\b/.test(location.search);
 
   function saveState() {
     writeJSON(STATE_KEY, { units: state.units, role: state.role, view: state.view, hideDone: state.hideDone });
   }
-  function saveTasks() {
-    writeJSON(TASKS_KEY, tasks);
-    customized = true;
+  // Lagre endrede/slettede oppgaver: i databasen når man er innlogget, ellers lokalt
+  function saveTasks(changed, removed) {
     rebuild();
+    persistTasks(changed || [], removed || []);
   }
 
   // ---------- Dato ----------
@@ -227,7 +230,13 @@
   }
 
   function renderFilters() {
-    document.getElementById('unit-chips').innerHTML = D.units.map(u => {
+    // Bare enheter brukeren har tilgang til
+    const readable = readableUnits();
+    if (readable.length) {
+      state.units = state.units.filter(u => readable.includes(u));
+      if (!state.units.length) state.units = readable.slice();
+    }
+    document.getElementById('unit-chips').innerHTML = D.units.filter(u => readable.includes(u.id)).map(u => {
       const on = state.units.includes(u.id);
       return `<button type="button" class="chip${on ? ' on' : ''}" data-action="unit" data-unit="${u.id}" aria-pressed="${on}">
         <span class="chip-check" aria-hidden="true">${on ? '✓' : ''}</span>${esc(u.name)}</button>`;
@@ -410,8 +419,12 @@
         const s = D.sources[t.source];
         details += `<p class="source-note">Kilde: <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a></p>`;
       }
-      if (isDone) details += `<p class="done-note">✓ Krysset av ${fmtDay(new Date(done[o.key]))}</p>`;
-      details += `<div class="task-actions">
+      if (t.public && mode() !== 'public') details += `<p class="link-note">🌐 Vises på den offentlige lenken</p>`;
+      if (isDone) {
+        const by = memberName(doneBy[o.key]);
+        details += `<p class="done-note">✓ Krysset av ${fmtDay(new Date(done[o.key]))}${by ? ' av ' + esc(by) : ''}</p>`;
+      }
+      if (canEditTask(t)) details += `<div class="task-actions">
         <button type="button" class="btn-small" data-action="edit" data-task="${esc(t.id)}">Rediger</button>
         <button type="button" class="btn-small" data-action="copy" data-task="${esc(t.id)}">Kopier</button>
       </div>`;
@@ -434,12 +447,13 @@
           </span>` : ''}
         </span>
       </button>
-      <button type="button" class="check" data-action="done" data-task="${esc(o.key)}" aria-pressed="${isDone}" aria-label="${isDone ? 'Fjern avkrysning' : 'Merk som gjort'}: ${esc(t.title)}">${CHECK_SVG}</button>
+      ${canTick() ? `<button type="button" class="check" data-action="done" data-task="${esc(o.key)}" aria-pressed="${isDone}" aria-label="${isDone ? 'Fjern avkrysning' : 'Merk som gjort'}: ${esc(t.title)}">${CHECK_SVG}</button>` : '<span></span>'}
       ${details}
     </article>`;
   }
 
   function addButton(i) {
+    if (!canAddTasks()) return '';
     const m = MONTHS[seasonMonths[i].m - 1];
     return `<button type="button" class="add-inline" data-action="new" data-month="${i}"><span>+</span> Legg til i ${m}</button>`;
   }
@@ -459,7 +473,43 @@
       ? `${all.length} ${all.length === 1 ? 'oppgave' : 'oppgaver'} · ${nDone} gjort`
       : 'Ingen oppgaver';
     const list = occForMonth(state.month);
-    document.getElementById('month-tasks').innerHTML = (list.length ? list.map(taskCard).join('') : emptyHtml(state.month)) + addButton(state.month);
+    document.getElementById('month-tasks').innerHTML = emptyWheelBanner() + (list.length ? list.map(taskCard).join('') : emptyHtml(state.month)) + addButton(state.month);
+  }
+
+  // Tomt årshjul i databasen: tilby å hente oppgaver
+  function emptyWheelBanner() {
+    if (mode() !== 'cloud' || tasks.length) return '';
+    if (!canAddTasks()) return '<div class="banner"><b>Årshjulet er tomt</b><p>Det er ingen oppgaver her ennå. En administrator legger dem inn.</p></div>';
+    const local = readJSON(TASKS_KEY, null);
+    return `<div class="banner">
+      <b>Årshjulet er tomt</b>
+      <p>Start med eksempeloppgavene (NHF Region Øst, NIF og sportslig utvalg) og tilpass dem${local ? ', eller last opp oppgavene du har lagt inn på denne enheten' : ''}.</p>
+      <div class="banner-actions">
+        <button type="button" class="btn-primary" data-action="import" data-val="seed">Hent ${D.tasks.length} eksempeloppgaver</button>
+        ${local ? `<button type="button" class="btn-secondary" data-action="import" data-val="local">Last opp mine ${local.length} lokale</button>` : ''}
+      </div>
+    </div>`;
+  }
+
+  // Før innlogging o.l.: blekt hjul og en melding i stedet for oppgavene
+  function gateHtml(m) {
+    if (m === 'welcome') return `
+      <h2>Velkommen til årshjulet</h2>
+      <p>Her finner styret, trenere og tillitsvalgte i Tune IL de faste oppgavene og fristene gjennom sesongen – og hvem som har ansvaret.</p>
+      <p>Logg inn med e-postadressen din for å se oppgavene. Du får en kode på e-post – ingen passord.</p>
+      <button type="button" class="btn-primary wide" data-action="login-open">Logg inn</button>
+      <a class="gate-link" href="?offentlig">Se det offentlige årshjulet →</a>`;
+    if (m === 'loading') return `<h2>Henter årshjulet …</h2><p>Et øyeblikk.</p>`;
+    if (m === 'nomember') return `
+      <h2>Ikke registrert ennå</h2>
+      <p>Du er logget inn som <b>${esc(session.email)}</b>, men denne adressen er ikke lagt inn i årshjulet.</p>
+      <p>Be en administrator i klubben eller gruppa legge deg til, så får du tilgang.</p>
+      <button type="button" class="btn-secondary wide" data-action="logout">Logg ut</button>`;
+    if (m === 'error') return `
+      <h2>Kunne ikke hente årshjulet</h2>
+      <p>${esc(cloudError || 'Ukjent feil')}. Sjekk nettet og prøv igjen.</p>
+      <button type="button" class="btn-primary wide" data-action="cloud-reload">Prøv igjen</button>`;
+    return '';
   }
 
   function renderList() {
@@ -476,6 +526,19 @@
   }
 
   function render() {
+    const m = mode();
+    document.body.dataset.mode = m;
+    document.getElementById('season-label').textContent = D.season.label;
+    document.body.classList.toggle('can-add', canAddTasks());
+    const gate = gateHtml(m);
+    document.getElementById('gate').innerHTML = gate;
+    if (gate) {
+      // Bare et blekt, tomt hjul bak meldingen
+      document.getElementById('view-hjul').hidden = false;
+      document.getElementById('view-liste').hidden = true;
+      renderWheel();
+      return;
+    }
     renderHero();
     renderFilters();
     document.getElementById('view-hjul').hidden = state.view !== 'hjul';
@@ -656,6 +719,7 @@
       cloud = { me, members, access, memberRoles, roles, units };
       cloudError = '';
       applyCloudRoles();
+      if (me) await loadTasks();
     } catch (err) {
       cloudError = err.message;
     }
@@ -668,7 +732,116 @@
     D.roles = cloud.roles.filter(r => r.active).map(r => ({ id: r.id, name: r.name, unit: r.unit_id, styre: r.styre }));
     roleById = Object.fromEntries(builtInRoles.map(r => [r.id, r]).concat(cloud.roles.map(r => [r.id, { id: r.id, name: r.name, unit: r.unit_id, styre: r.styre }])));
   }
+  // ---------- Modus og tilgang ----------
+  // public: offentlig lenke · local: uten database · welcome/loading/nomember/error: før innhold · cloud: innlogget
+  function mode() {
+    if (PUBLIC) return 'public';
+    if (!cloudReady) return 'local';
+    if (!session) return 'welcome';
+    if (!cloud) return cloudError ? 'error' : 'loading';
+    if (!cloud.me) return 'nomember';
+    if (!tasksLoaded) return cloudError ? 'error' : 'loading';
+    return 'cloud';
+  }
+  function canEditUnit(u) {
+    const m = mode();
+    if (m === 'local') return true;
+    if (m !== 'cloud') return false;
+    const a = myAccess(u);
+    return a === 'admin' || a === 'editor';
+  }
+  function canEditTask(t) { return t.units.some(canEditUnit); }
+  function canAddTasks() { return D.units.some(u => canEditUnit(u.id)); }
+  function canTick() { const m = mode(); return m === 'local' || m === 'cloud'; }
+  function readableUnits() {
+    return mode() === 'cloud' ? D.units.filter(u => myAccess(u.id)).map(u => u.id) : D.units.map(u => u.id);
+  }
+  function memberName(email) {
+    if (!email || !cloud) return '';
+    const m = cloud.members.find(x => x.email === email);
+    return m ? m.name : email;
+  }
+
+  // ---------- Oppgaver i databasen ----------
+  const SEASON_Q = encodeURIComponent(D.season.label);
+  function rowToTask(r) { return Object.assign({}, r.data, { id: r.id, units: r.units }); }
+  function taskToRow(t) {
+    const data = Object.assign({}, t);
+    delete data.id; delete data.units;
+    return { id: t.id, season: D.season.label, units: t.units, data };
+  }
+  async function loadTasks() {
+    const [rows, st] = await Promise.all([
+      rest(`tasks?season=eq.${SEASON_Q}&deleted=is.false&select=id,units,data`),
+      rest(`task_status?season=eq.${SEASON_Q}&select=task_key,status,updated_at,updated_by`)
+    ]);
+    tasks = rows.map(rowToTask);
+    done = {}; doneBy = {};
+    st.forEach(x => { if (x.status === 'done') { done[x.task_key] = x.updated_at; doneBy[x.task_key] = x.updated_by; } });
+    tasksLoaded = true;
+    lastLoad = Date.now();
+    rebuild();
+  }
+  let lastLoad = 0;
+  async function loadPublic() {
+    try {
+      const res = await fetch(`${SB_URL}/rest/v1/tasks?season=eq.${SEASON_Q}&select=id,units,data`, { headers: { apikey: SB_KEY } });
+      const rows = res.ok ? await res.json() : [];
+      tasks = rows.map(rowToTask);
+    } catch (err) { tasks = []; }
+    tasksLoaded = true;
+    rebuild(); render();
+  }
+  async function persistTasks(changed, removed) {
+    const m = mode();
+    if (m === 'local') { writeJSON(TASKS_KEY, tasks); customized = true; return; }
+    if (m !== 'cloud') return;
+    try {
+      if (changed.length) await rest('tasks', { method: 'POST', body: changed.map(taskToRow), prefer: 'resolution=merge-duplicates,return=minimal' });
+      for (const id of removed) await rest(`tasks?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE', prefer: 'return=minimal' });
+    } catch (err) {
+      toast('Kunne ikke lagre: ' + err.message);
+      try { await loadTasks(); } catch (e) { /* vises ved neste forsøk */ }
+      render();
+    }
+  }
+  async function setDone(key, on) {
+    const o = occ.find(x => x.key === key);
+    if (!o) return;
+    if (on) { done[key] = new Date().toISOString(); doneBy[key] = session && session.email; }
+    else { delete done[key]; delete doneBy[key]; }
+    render();
+    if (mode() === 'local') { writeJSON(DONE_KEY, done); return; }
+    try {
+      if (on) await rest('task_status', { method: 'POST', body: { season: D.season.label, task_key: key, task_id: o.t.id, status: 'done' }, prefer: 'resolution=merge-duplicates,return=minimal' });
+      else await rest(`task_status?season=eq.${SEASON_Q}&task_key=eq.${encodeURIComponent(key)}`, { method: 'DELETE', prefer: 'return=minimal' });
+    } catch (err) {
+      toast('Kunne ikke lagre avkrysningen: ' + err.message);
+      try { await loadTasks(); } catch (e) { /* ignorer */ }
+      render();
+    }
+  }
+  // Første gang: hent eksempeloppgavene eller de lokale oppgavene inn i databasen
+  async function importTasks(source) {
+    const local = readJSON(TASKS_KEY, null);
+    const list = (source === 'local' && local ? local : clone(D.tasks)).filter(t => t.units.some(canEditUnit));
+    if (!list.length) return toast('Ingen oppgaver du har lov til å legge inn.');
+    try {
+      await rest('tasks', { method: 'POST', body: list.map(taskToRow), prefer: 'resolution=merge-duplicates,return=minimal' });
+      if (source === 'local') {
+        const ids = new Set(list.map(t => t.id));
+        const localDone = readJSON(DONE_KEY, {});
+        const st = Object.keys(localDone).map(k => ({ season: D.season.label, task_key: k, task_id: k.split('@')[0], status: 'done' })).filter(s => ids.has(s.task_id));
+        if (st.length) await rest('task_status', { method: 'POST', body: st, prefer: 'resolution=merge-duplicates,return=minimal' });
+      }
+      await loadTasks();
+      render();
+      toast(`${list.length} oppgaver er lagt inn i årshjulet`);
+    } catch (err) { toast('Kunne ikke legge inn: ' + err.message); }
+  }
+
   function logoutLocal() {
+    tasks = []; done = {}; doneBy = {}; tasksLoaded = false;
     session = null; cloud = null;
     writeJSON(SESSION_KEY, null);
     D.roles = builtInRoles.slice();
@@ -1078,12 +1251,14 @@
       <section class="sheet-section">
         <h3>Oppgaver og data</h3>
         <div class="group">
-          ${row('plus', 'Ny oppgave', 'Legg til en oppgave i årshjulet', { action: 'new' })}
-          ${row('cal', 'Last ned kalenderfil', 'Fristene som passer filteret nå, som .ics-fil', { action: 'ics' })}
-          ${row('print', 'Skriv ut / lagre som PDF', 'Hele sesongen som liste', { action: 'print' })}
-          ${row('save', 'Last ned sikkerhetskopi', 'Alle oppgaver og avkrysninger som fil', { action: 'backup' })}
-          ${row('reset', armed === 'reset-done' ? 'Trykk igjen for å nullstille' : 'Nullstill avkrysninger', nDone ? `${nDone} avkrysset på denne enheten` : 'Ingen avkrysninger ennå', { action: 'reset-done', danger: true })}
-          ${customized ? row('trash', armed === 'reset-tasks' ? 'Trykk igjen – endringene dine slettes' : 'Tilbakestill til eksempeloppgavene', 'Fjerner oppgavene du har lagt til eller endret', { action: 'reset-tasks', danger: true }) : ''}
+          ${canAddTasks() ? row('plus', 'Ny oppgave', 'Legg til en oppgave i årshjulet', { action: 'new' }) : ''}
+          ${mode() === 'cloud' ? row('link', 'Kopier offentlig lenke', 'Viser bare oppgaver merket «Vis på offentlig lenke» – uten innlogging', { action: 'share-public' }) : ''}
+          ${canTick() ? row('cal', 'Last ned kalenderfil', 'Fristene som passer filteret nå, som .ics-fil', { action: 'ics' }) : ''}
+          ${canTick() ? row('print', 'Skriv ut / lagre som PDF', 'Hele sesongen som liste', { action: 'print' }) : ''}
+          ${canTick() ? row('save', 'Last ned sikkerhetskopi', 'Alle oppgaver og avkrysninger som fil', { action: 'backup' }) : ''}
+          ${mode() === 'local' ? row('reset', armed === 'reset-done' ? 'Trykk igjen for å nullstille' : 'Nullstill avkrysninger', nDone ? `${nDone} avkrysset på denne enheten` : 'Ingen avkrysninger ennå', { action: 'reset-done', danger: true }) : ''}
+          ${mode() === 'local' && customized ? row('trash', armed === 'reset-tasks' ? 'Trykk igjen – endringene dine slettes' : 'Tilbakestill til eksempeloppgavene', 'Fjerner oppgavene du har lagt til eller endret', { action: 'reset-tasks', danger: true }) : ''}
+          ${!canTick() ? row('cal', 'Kalender, utskrift og sikkerhetskopi', 'Når du er logget inn', { soon: 'Logg inn' }) : ''}
         </div>
       </section>
 
@@ -1122,7 +1297,8 @@
             <li>Trykk på <b>+</b> nede til høyre, eller «Legg til i …» under en måned.</li>
             <li>Åpne en oppgave og trykk <b>Rediger</b> eller <b>Kopier</b>.</li>
             <li>Fristen kan være en fast dato, bare en måned, «dato kommer», en periode (åpner–frist) eller et antall dager/uker før en annen oppgave.</li>
-            <li>Foreløpig lagres oppgavene bare på denne enheten. Last ned en sikkerhetskopi hvis du legger inn mye.</li></ul>`)}
+            <li>Bare redaktører og admins kan legge til og endre oppgaver, og bare i sine egne enheter.</li>
+            <li>Huk av «Vis på offentlig lenke» for oppgaver som foreldre og trenere bør se uten å logge inn.</li></ul>`)}
           ${guide('Neste frister', `<p>Øverst ser du de neste fristene og frister som har passert uten å bli krysset av. Trykk på et kort for å gå til oppgaven.</p>`)}
         </div>
       </section>
@@ -1131,8 +1307,8 @@
         <h3>Om</h3>
         <div class="group about">
           <div><b>Tune IL årshjul</b> · testversjon ${VERSION}</div>
-          <div>Oppgavene er eksempler. Frister fra NHF Region Øst og NIF må sjekkes hver sesong.</div>
-          <div>Oppgaver og avkrysninger lagres foreløpig bare på denne enheten.</div>
+          <div>Frister fra NHF Region Øst og NIF må sjekkes hver sesong.</div>
+          <div>Oppgaver og avkrysninger lagres i klubbens database og deles med alle som har tilgang.</div>
         </div>
       </section>`;
   }
@@ -1168,17 +1344,19 @@
       repeat: t.repeat || 'yearly',
       sub: (t.sub || []).map(s => { const b = subBefore(s); return { title: s.title, amount: b ? b.amount : '', unit: b ? b.unit : 'days' }; }),
       links: (t.links || []).map(l => ({ label: l.label || '', url: l.url || '' })),
-      prepares: t.prepares || '', source: t.source || ''
+      prepares: t.prepares || '', source: t.source || '', public: !!t.public
     };
   }
   function blankDraft(monthIdx) {
-    const units = state.units.includes('handball') ? ['handball'] : [state.units[0]];
+    const editable = D.units.map(u => u.id).filter(canEditUnit);
+    const pref = state.units.filter(u => editable.includes(u));
+    const units = pref.includes('handball') ? ['handball'] : pref.length ? [pref[0]] : editable.slice(0, 1);
     return {
       id: null, title: '', description: '', type: 'frist', units,
-      role: state.role !== 'alle' ? state.role : '', kind: 'month',
+      role: state.role !== 'alle' && state.role !== 'mine' ? state.role : '', kind: 'month',
       due: '', opens: '', month: seasonMonths[monthIdx].m,
       relTask: '', relAmount: 2, relUnit: 'weeks', repeat: 'yearly',
-      sub: [], links: [], prepares: '', source: ''
+      sub: [], links: [], prepares: '', source: '', public: false
     };
   }
 
@@ -1237,7 +1415,7 @@
         </div>
 
         <div class="field"><span>Gjelder</span>
-          <div class="opt-chips">${D.units.map(u => `<button type="button" class="opt-chip unit${d.units.includes(u.id) ? ' on' : ''}" data-action="f-unit" data-val="${u.id}" aria-pressed="${d.units.includes(u.id)}">${d.units.includes(u.id) ? '✓ ' : ''}${esc(u.name)}</button>`).join('')}</div>
+          <div class="opt-chips">${D.units.map(u => `<button type="button" class="opt-chip unit${d.units.includes(u.id) ? ' on' : ''}" data-action="f-unit" data-val="${u.id}" aria-pressed="${d.units.includes(u.id)}"${canEditUnit(u.id) ? '' : ' disabled title="Du er ikke redaktør eller admin her"'}>${d.units.includes(u.id) ? '✓ ' : ''}${esc(u.name)}</button>`).join('')}</div>
         </div>
 
         <label class="field"><span>Ansvarlig verv</span>
@@ -1279,6 +1457,12 @@
 
         ${d.kind !== 'rel' ? `<label class="field"><span>Forbereder oppgave (valgfritt)</span><select data-field="prepares">${prepOpts}</select></label>` : ''}
 
+        <label class="toggle form-toggle">
+          <input type="checkbox" data-check="public"${d.public ? ' checked' : ''}>
+          <span class="toggle-track" aria-hidden="true"></span>
+          <span><b>Vis på offentlig lenke</b><br><small>For ting foreldre og trenere bør vite om, f.eks. påmeldingsfrister, dugnad og håndballskole. Uten navn på ansvarlige.</small></span>
+        </label>
+
         ${formError ? `<p class="form-error" role="alert">${esc(formError)}</p>` : ''}
 
         <div class="form-actions">
@@ -1298,6 +1482,7 @@
     if (!draft) return;
     const el = e.target;
     if (el.dataset.field) draft[el.dataset.field] = el.value;
+    if (el.dataset.check) draft[el.dataset.check] = el.checked;
     if (el.dataset.sub !== undefined) draft.sub[Number(el.dataset.sub)][el.dataset.key] = el.value;
     if (el.dataset.link !== undefined) draft.links[Number(el.dataset.link)][el.dataset.key] = el.value;
   });
@@ -1352,6 +1537,8 @@
     });
     if (links.length) t.links = links;
     if (d.source) t.source = d.source;
+    if (d.public) t.public = true;
+    if (!t.units.some(canEditUnit)) return fail('Du kan bare lage oppgaver i enheter der du er redaktør eller admin.');
 
     const i = tasks.findIndex(x => x.id === t.id);
     if (i >= 0) {
@@ -1360,7 +1547,7 @@
       if ((old.repeat || 'yearly') !== (t.repeat || 'yearly')) clearDone(t.id);
       tasks[i] = t;
     } else tasks.push(t);
-    saveTasks();
+    saveTasks([t]);
 
     closeDialog('task-form');
     // Vis oppgaven der den havnet
@@ -1375,23 +1562,30 @@
   }
 
   function clearDone(taskId) {
-    Object.keys(done).forEach(k => { if (k === taskId || k.startsWith(taskId + '@')) delete done[k]; });
-    writeJSON(DONE_KEY, done);
+    Object.keys(done).forEach(k => { if (k === taskId || k.startsWith(taskId + '@')) { delete done[k]; delete doneBy[k]; } });
+    if (mode() === 'local') writeJSON(DONE_KEY, done);
+    else if (mode() === 'cloud') rest(`task_status?season=eq.${SEASON_Q}&task_id=eq.${encodeURIComponent(taskId)}`, { method: 'DELETE', prefer: 'return=minimal' }).catch(() => {});
   }
 
   function deleteTask(id) {
     // Oppgaver som var regnet fra denne får fast dato i stedet
+    const changed = [];
     tasks.forEach(t => {
+      if (t.id === id) return;
+      let touched = false;
       if (t.rel && t.rel.task === id) {
         const due = resolveDue(t);
         delete t.rel;
         if (due) { t.due = isoDate(due); delete t.month; }
+        touched = true;
       }
-      if (t.prepares === id) delete t.prepares;
+      if (t.prepares === id) { delete t.prepares; touched = true; }
+      if (touched) changed.push(t);
     });
     tasks = tasks.filter(t => t.id !== id);
-    clearDone(id);
-    saveTasks();
+    Object.keys(done).forEach(k => { if (k === id || k.startsWith(id + '@')) { delete done[k]; delete doneBy[k]; } });
+    if (mode() === 'local') writeJSON(DONE_KEY, done);
+    saveTasks(changed.filter(canEditTask), [id]);
     state.open = null;
     closeDialog('task-form');
     render();
@@ -1464,8 +1658,18 @@
       state.open = state.open === el.dataset.task ? null : el.dataset.task; render();
     } else if (a === 'done') {
       const key = el.dataset.task;
-      if (done[key]) delete done[key]; else done[key] = new Date().toISOString();
-      writeJSON(DONE_KEY, done); render();
+      if (canTick()) setDone(key, !done[key]);
+    } else if (a === 'import') {
+      el.disabled = true; el.textContent = 'Legger inn …';
+      importTasks(el.dataset.val);
+    } else if (a === 'login-open') {
+      openMore('login');
+      login = { step: 'email', email: '', busy: false, msg: '' };
+      renderMore();
+    } else if (a === 'share-public') {
+      const url = location.origin + location.pathname + '?offentlig';
+      (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject())
+        .then(() => toast('Lenken er kopiert'), () => toast(url));
     } else if (a === 'goto') {
       const o = findOcc(el.dataset.task);
       if (!o) return;
@@ -1479,6 +1683,7 @@
       const card = document.getElementById('task-' + o.key);
       if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
     } else if (a === 'new') {
+      if (!canAddTasks()) return;
       closeDialog('more');
       openForm(blankDraft(el.dataset.month !== undefined ? Number(el.dataset.month) : state.month));
     } else if (a === 'edit') {
@@ -1589,7 +1794,17 @@
     state.hideDone = e.target.checked; saveState(); render();
   });
 
+  // Med database: start tomt og hent oppgavene etter innlogging
+  if (PUBLIC || cloudReady) { tasks = []; done = {}; }
   rebuild();
   render();
-  if (cloudReady && session) loadCloud();
+  if (PUBLIC) loadPublic();
+  else if (cloudReady && session) loadCloud();
+
+  // Hent endringer fra andre når appen åpnes igjen (maks hvert 30. sekund)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && mode() === 'cloud' && Date.now() - lastLoad > 30000 && !document.querySelector('dialog[open]')) {
+      loadTasks().then(render).catch(() => {});
+    }
+  });
 })();

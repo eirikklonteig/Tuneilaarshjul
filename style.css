@@ -562,6 +562,61 @@ button.row:hover { background: var(--surface-2); }
 .mini-toggle input { accent-color: var(--green); margin: 0; }
 .role-add { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding-top: 4px; }
 
+/* ---------- Modus: velkomst, offentlig, tilgang ---------- */
+.gate:empty { display: none; }
+.gate {
+  align-self: center; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lift); padding: 26px 22px; display: grid; gap: 12px; max-width: 460px;
+}
+.gate h2 { font-size: 1.5rem; font-weight: 800; }
+.gate p { margin: 0; color: var(--muted); }
+.gate p b { color: var(--text); }
+.gate .btn-primary.wide, .gate .btn-secondary.wide { padding: 13px; font-size: 1rem; margin-top: 4px; }
+.gate-link { color: var(--accent); font-weight: 700; text-decoration: none; text-align: center; font-size: .9rem; }
+body[data-mode="welcome"] .progress, body[data-mode="welcome"] .upcoming-head, body[data-mode="welcome"] .upcoming,
+body[data-mode="loading"] .progress, body[data-mode="loading"] .upcoming-head, body[data-mode="loading"] .upcoming,
+body[data-mode="nomember"] .progress, body[data-mode="nomember"] .upcoming-head, body[data-mode="nomember"] .upcoming,
+body[data-mode="error"] .progress, body[data-mode="error"] .upcoming-head, body[data-mode="error"] .upcoming { display: none; }
+body[data-mode="welcome"] .toolbar, body[data-mode="loading"] .toolbar, body[data-mode="nomember"] .toolbar, body[data-mode="error"] .toolbar,
+body[data-mode="welcome"] .view-switch, body[data-mode="loading"] .view-switch, body[data-mode="nomember"] .view-switch, body[data-mode="error"] .view-switch,
+body[data-mode="welcome"] .month-panel, body[data-mode="loading"] .month-panel, body[data-mode="nomember"] .month-panel, body[data-mode="error"] .month-panel { display: none; }
+body[data-mode="welcome"] .wheel-card, body[data-mode="loading"] .wheel-card, body[data-mode="nomember"] .wheel-card, body[data-mode="error"] .wheel-card {
+  opacity: .45; pointer-events: none; filter: saturate(.6);
+}
+body[data-mode="welcome"] .legend, body[data-mode="welcome"] .wheel-hint,
+body[data-mode="loading"] .legend, body[data-mode="loading"] .wheel-hint,
+body[data-mode="nomember"] .legend, body[data-mode="nomember"] .wheel-hint,
+body[data-mode="error"] .legend, body[data-mode="error"] .wheel-hint { display: none; }
+@media (min-width: 900px) {
+  body[data-mode="welcome"] .hjul-layout, body[data-mode="loading"] .hjul-layout,
+  body[data-mode="nomember"] .hjul-layout, body[data-mode="error"] .hjul-layout { padding-top: 12px; }
+}
+@media (max-width: 899px) {
+  .gate { order: -1; }
+}
+body:not(.can-add) .fab { display: none; }
+.pill-public, .login-pill { display: none; }
+body[data-mode="public"] .pill-test { display: none; }
+body[data-mode="public"] .pill-public { display: inline; background: var(--accent-soft); color: var(--accent); }
+body[data-mode="public"] .login-pill {
+  display: inline-flex; align-items: center; padding: 9px 16px; border-radius: 999px; font-weight: 700; font-size: .88rem;
+  background: var(--chip-on-bg); color: var(--chip-on-fg); text-decoration: none;
+}
+body[data-mode="public"] .more-btn, body[data-mode="public"] .progress, body[data-mode="public"] .select-wrap,
+body[data-mode="public"] .toggle, body[data-mode="public"] .role, body[data-mode="public"] .hub-count { display: none; }
+body[data-mode="cloud"] .pill-test { display: none; }
+.banner {
+  background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--green) 25%, transparent);
+  border-radius: var(--radius); padding: 16px; display: grid; gap: 8px;
+}
+.banner b { font-size: 1.05rem; }
+.banner p { margin: 0; color: var(--muted); font-size: .9rem; }
+.banner-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.form-toggle { align-items: flex-start; color: var(--text); }
+.form-toggle .toggle-track { margin-top: 2px; }
+.form-toggle small { color: var(--muted); font-size: .78rem; font-weight: 400; }
+.opt-chip:disabled { opacity: .4; cursor: not-allowed; }
+
 /* ---------- Mobil ---------- */
 @media (max-width: 560px) {
   .brand h1 { font-size: 1.05rem; }
