@@ -1,0 +1,10 @@
+/* =========================================================
+   Tune IL årshjul – kobling til Supabase
+   Adressen og den offentlige nøkkelen er laget for å ligge i appen.
+   Tilgangsreglene ligger i databasen (se supabase/schema.sql).
+   ALDRI legg inn service_role-nøkkelen eller databasepassordet her.
+   ========================================================= */
+window.ARSHJUL_CONFIG = {
+  supabaseUrl: '',   // f.eks. 'https://abcdefgh.supabase.co'
+  supabaseKey: ''    // f.eks. 'sb_publishable_…'
+};

@@ -6,7 +6,7 @@
   'use strict';
 
   const D = window.ARSHJUL_DATA;
-  const VERSION = '0.5';
+  const VERSION = '0.6';
   const MONTHS = ['januar', 'februar', 'mars', 'april', 'mai', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'desember'];
   const MONTHS_SHORT = ['JAN', 'FEB', 'MAR', 'APR', 'MAI', 'JUN', 'JUL', 'AUG', 'SEP', 'OKT', 'NOV', 'DES'];
   const WEEKDAYS = ['søndag', 'mandag', 'tirsdag', 'onsdag', 'torsdag', 'fredag', 'lørdag'];
@@ -25,7 +25,7 @@
   const UNIT_WORD = { days: ['dag', 'dager'], weeks: ['uke', 'uker'], months: ['måned', 'måneder'] };
 
   const unitById = Object.fromEntries(D.units.map(u => [u.id, u]));
-  const roleById = Object.fromEntries(D.roles.map(r => [r.id, r]));
+  let roleById = Object.fromEntries(D.roles.map(r => [r.id, r]));
 
   // ---------- Lagring ----------
   function readJSON(key, fallback) {
@@ -61,7 +61,7 @@
   const saved = readJSON(STATE_KEY, {});
   const state = {
     units: Array.isArray(saved.units) && saved.units.some(id => unitById[id]) ? saved.units.filter(id => unitById[id]) : ['klubb', 'handball'],
-    role: saved.role && (saved.role === 'alle' || roleById[saved.role]) ? saved.role : 'alle',
+    role: saved.role && (saved.role === 'alle' || saved.role === 'mine' || roleById[saved.role]) ? saved.role : 'alle',
     view: saved.view === 'liste' ? 'liste' : 'hjul',
     hideDone: !!saved.hideDone,
     month: todayIndex() >= 0 ? todayIndex() : 0,
@@ -161,6 +161,7 @@
   // ---------- Filtrering ----------
   function matchesFilter(t) {
     if (!t.units.some(u => state.units.includes(u))) return false;
+    if (state.role === 'mine') return myRoleIds().includes(t.role);
     if (state.role !== 'alle' && t.role !== state.role) return false;
     return true;
   }
@@ -233,8 +234,10 @@
     }).join('');
 
     const sel = document.getElementById('role-select');
-    sel.innerHTML = '<option value="alle">Alle verv</option>' + roleOptions(state.units);
-    if (state.role !== 'alle' && !state.units.includes(roleById[state.role].unit)) state.role = 'alle';
+    const mineOpt = myRoleIds().length ? '<option value="mine">★ Mine verv</option>' : '';
+    sel.innerHTML = '<option value="alle">Alle verv</option>' + mineOpt + roleOptions(state.units);
+    if (state.role === 'mine' && !mineOpt) state.role = 'alle';
+    if (state.role !== 'alle' && state.role !== 'mine' && (!roleById[state.role] || !state.units.includes(roleById[state.role].unit))) state.role = 'alle';
     sel.value = state.role;
 
     document.getElementById('hide-done').checked = state.hideDone;
@@ -401,6 +404,8 @@
       if (t.links && t.links.length) {
         details += '<div class="links">' + t.links.map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label || l.url)} ↗</a>`).join('') + '</div>';
       }
+      const holders = roleHolders(t.role);
+      if (holders.length) details += `<p class="link-note">Ansvarlig: <b>${holders.map(esc).join(', ')}</b> (${esc(roleLabel(t.role))})</p>`;
       if (t.source && D.sources && D.sources[t.source]) {
         const s = D.sources[t.source];
         details += `<p class="source-note">Kilde: <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a></p>`;
@@ -569,10 +574,473 @@
       <span class="row-text"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${right}</${tag}>`;
   }
 
+  // =========================================================
+  // Innlogging og brukerregister (Supabase)
+  // Innlogging med kode på e-post. Vi snakker med Supabase med vanlig fetch.
+  // =========================================================
+  const CFG = window.ARSHJUL_CONFIG || {};
+  const SB_URL = (CFG.supabaseUrl || '').replace(/\/$/, '');
+  const SB_KEY = CFG.supabaseKey || '';
+  const cloudReady = !!(SB_URL && SB_KEY);
+  const SESSION_KEY = 'arshjul-innlogging';
+  const LEVELS = { admin: 'Admin', editor: 'Redaktør', reader: 'Leser' };
+  const LEVEL_HELP = { admin: 'kan også legge til brukere og verv', editor: 'kan opprette og endre oppgaver', reader: 'ser oppgavene og kan krysse av' };
+  ICONS.logout = '<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>';
+  ICONS.shield = '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>';
+  ICONS.back = '<path d="M15 5l-7 7 7 7"/>';
+
+  let session = readJSON(SESSION_KEY, null);  // { access_token, refresh_token, expires_at, email }
+  let cloud = null;   // { me, members, access, memberRoles, roles, units }
+  let cloudError = '';
+  let moreView = 'main';
+  let login = { step: 'email', email: '', busy: false, msg: '' };
+  let userDraft = null;
+  let userSearch = '';
+  const builtInRoles = D.roles.slice();
+
+  async function authCall(path, body, token) {
+    const headers = { apikey: SB_KEY, 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = 'Bearer ' + token;
+    const res = await fetch(`${SB_URL}/auth/v1/${path}`, { method: 'POST', headers, body: JSON.stringify(body || {}) });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) { const err = new Error(json.msg || json.error_description || json.message || `Feil ${res.status}`); err.status = res.status; throw err; }
+    return json;
+  }
+  function storeSession(json) {
+    session = {
+      access_token: json.access_token, refresh_token: json.refresh_token,
+      expires_at: Date.now() + (json.expires_in || 3600) * 1000,
+      email: ((json.user && json.user.email) || (session && session.email) || '').toLowerCase()
+    };
+    writeJSON(SESSION_KEY, session);
+  }
+  async function validToken() {
+    if (!session) return null;
+    if (Date.now() < session.expires_at - 60000) return session.access_token;
+    try {
+      storeSession(await authCall('token?grant_type=refresh_token', { refresh_token: session.refresh_token }));
+      return session.access_token;
+    } catch (err) {
+      if (err.status) { logoutLocal(); toast('Innloggingen har gått ut. Logg inn på nytt under ☰.'); }
+      return null;
+    }
+  }
+  async function rest(path, opts) {
+    const { method = 'GET', body, prefer } = opts || {};
+    const token = await validToken();
+    if (!token) throw new Error('Ikke logget inn');
+    const headers = { apikey: SB_KEY, Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' };
+    if (prefer) headers.Prefer = prefer;
+    const res = await fetch(`${SB_URL}/rest/v1/${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    const text = await res.text();
+    const json = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      const msg = (json && json.message) || `Feil ${res.status}`;
+      throw new Error(/row-level security/.test(msg) ? 'Du har ikke tilgang til å gjøre dette.' : /members_email/.test(msg) ? 'Det finnes allerede en bruker med denne e-postadressen.' : msg);
+    }
+    return json;
+  }
+
+  // Hent brukere, tilgang og verv. Databasen viser bare det brukeren har lov til å se.
+  async function loadCloud() {
+    if (!cloudReady || !session) return;
+    try {
+      const [members, access, memberRoles, roles, units] = await Promise.all([
+        rest('members?select=id,email,name,is_superadmin,active&order=name'),
+        rest('member_access?select=member_id,unit_id,level'),
+        rest('member_roles?select=member_id,role_id'),
+        rest('roles?select=id,unit_id,name,styre,sort,active&order=sort,name'),
+        rest('units?select=id,name,short,parent,sort&order=sort')
+      ]);
+      const me = members.find(m => m.email === session.email && m.active) || null;
+      cloud = { me, members, access, memberRoles, roles, units };
+      cloudError = '';
+      applyCloudRoles();
+    } catch (err) {
+      cloudError = err.message;
+    }
+    render();
+    if (document.getElementById('more').open) renderMore();
+  }
+  // Vervene fra databasen erstatter de innebygde
+  function applyCloudRoles() {
+    if (!cloud || !cloud.roles.length) return;
+    D.roles = cloud.roles.filter(r => r.active).map(r => ({ id: r.id, name: r.name, unit: r.unit_id, styre: r.styre }));
+    roleById = Object.fromEntries(builtInRoles.map(r => [r.id, r]).concat(cloud.roles.map(r => [r.id, { id: r.id, name: r.name, unit: r.unit_id, styre: r.styre }])));
+  }
+  function logoutLocal() {
+    session = null; cloud = null;
+    writeJSON(SESSION_KEY, null);
+    D.roles = builtInRoles.slice();
+    roleById = Object.fromEntries(builtInRoles.map(r => [r.id, r]));
+    if (state.role === 'mine') state.role = 'alle';
+    render();
+  }
+
+  // Hjelpere for tilgang og verv
+  function myAccess(unit) {
+    if (!cloud || !cloud.me) return null;
+    if (cloud.me.is_superadmin) return 'admin';
+    const a = cloud.access.find(x => x.member_id === cloud.me.id && x.unit_id === unit);
+    return a ? a.level : null;
+  }
+  function isSuper() { return !!(cloud && cloud.me && cloud.me.is_superadmin); }
+  function isAnyAdmin() { return isSuper() || !!(cloud && cloud.me && cloud.access.some(a => a.member_id === cloud.me.id && a.level === 'admin')); }
+  function myRoleIds() { return cloud && cloud.me ? cloud.memberRoles.filter(r => r.member_id === cloud.me.id).map(r => r.role_id) : []; }
+  function roleHolders(roleId) {
+    if (!cloud) return [];
+    return cloud.memberRoles.filter(r => r.role_id === roleId)
+      .map(r => cloud.members.find(m => m.id === r.member_id)).filter(m => m && m.active).map(m => m.name);
+  }
+  function memberAccess(id) { return cloud.access.filter(a => a.member_id === id); }
+  function memberRoleIds(id) { return cloud.memberRoles.filter(r => r.member_id === id).map(r => r.role_id); }
+  function initials(name) { return name.split(/\s+/).filter(Boolean).slice(0, 2).map(s => s[0].toUpperCase()).join(''); }
+  function unitName(id) { return (unitById[id] || {}).name || id; }
+
+  function sheetHead(title, back) {
+    return `<div class="sheet-head">
+      ${back ? `<button type="button" class="icon-btn" data-action="more-view" data-val="${back}" aria-label="Tilbake">${ico('back')}</button>` : ''}
+      <h2>${esc(title)}</h2>
+      <button type="button" class="icon-btn" data-action="close-more" aria-label="Lukk">${ico('close')}</button>
+    </div>`;
+  }
+
+  // Profil-delen i Mer
+  function profileHtml() {
+    if (!cloudReady) return `<div class="group">${row('user', 'Logg inn', 'Kommer straks – databasen settes opp nå', { soon: 'Snart' })}</div>`;
+    if (!session) return `<div class="group">${row('user', 'Logg inn', 'Med kode på e-post – ingen passord å huske', { action: 'login' })}</div>`;
+    if (cloudError) return `<div class="group">${row('user', esc(session.email), 'Kunne ikke hente data: ' + esc(cloudError), {})}${row('reset', 'Prøv igjen', '', { action: 'cloud-reload' })}${row('logout', 'Logg ut', '', { action: 'logout' })}</div>`;
+    if (!cloud) return `<div class="group">${row('user', esc(session.email), 'Henter …', {})}</div>`;
+    if (!cloud.me) return `<div class="group">
+      ${row('user', esc(session.email), 'Denne e-postadressen er ikke registrert i årshjulet. Be en administrator legge deg til.', {})}
+      ${row('logout', 'Logg ut', '', { action: 'logout' })}</div>`;
+    const me = cloud.me;
+    const acc = me.is_superadmin ? '<span class="lvl admin">Hovedadmin</span>'
+      : memberAccess(me.id).map(a => `<span class="lvl ${a.level}">${esc(unitName(a.unit_id))}: ${LEVELS[a.level]}</span>`).join('');
+    const roles = myRoleIds().map(id => roleById[id]).filter(Boolean).map(r => `${esc(r.name)} · ${esc(unitName(r.unit))}`).join(', ');
+    return `<div class="group">
+      <div class="profile">
+        <span class="avatar">${esc(initials(me.name))}</span>
+        <span class="row-text"><b>${esc(me.name)}</b><small>${esc(me.email)}</small></span>
+      </div>
+      <div class="profile-meta">
+        <div class="lvls">${acc || '<span class="lvl">Ingen tilgang ennå</span>'}</div>
+        <small>${roles ? 'Verv: ' + roles : 'Ingen verv registrert'}</small>
+      </div>
+      ${myRoleIds().length ? row('star', 'Vis bare mine oppgaver', 'Velger «Mine verv» i filteret', { action: 'show-mine' }) : ''}
+      ${row('logout', 'Logg ut', '', { action: 'logout' })}
+    </div>`;
+  }
+
+  // ---------- Innlogging ----------
+  function renderLogin() {
+    const L = login;
+    document.getElementById('more-content').innerHTML = `
+      ${sheetHead('Logg inn', 'main')}
+      <div class="group pad">
+        ${L.step === 'email' ? `
+          <p class="lead">Skriv e-postadressen din, så sender vi deg en engangskode. Du trenger ikke passord.</p>
+          <label class="field"><span>E-post</span><input type="email" id="login-email" value="${esc(L.email)}" autocomplete="email" inputmode="email" placeholder="navn@eksempel.no"></label>
+          <button type="button" class="btn-primary wide" data-action="send-code"${L.busy ? ' disabled' : ''}>${L.busy ? 'Sender …' : 'Send kode'}</button>
+        ` : `
+          <p class="lead">Vi har sendt en kode til <b>${esc(L.email)}</b>. Sjekk også søppelpost.</p>
+          <label class="field"><span>Kode fra e-posten</span><input type="text" id="login-code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456" class="code-input"></label>
+          <button type="button" class="btn-primary wide" data-action="verify-code"${L.busy ? ' disabled' : ''}>${L.busy ? 'Logger inn …' : 'Logg inn'}</button>
+          <div class="login-links">
+            <button type="button" class="linklike" data-action="send-code">Send ny kode</button>
+            <button type="button" class="linklike" data-action="login-change">Bruk en annen e-post</button>
+          </div>
+        `}
+        ${L.msg ? `<p class="form-error" role="alert">${esc(L.msg)}</p>` : ''}
+      </div>`;
+    setTimeout(() => { const el = document.getElementById(L.step === 'email' ? 'login-email' : 'login-code'); if (el) el.focus(); }, 50);
+  }
+  async function sendCode() {
+    const input = document.getElementById('login-email');
+    const email = (input ? input.value : login.email).trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { login.msg = 'Skriv en gyldig e-postadresse.'; return renderLogin(); }
+    login = { step: login.step, email, busy: true, msg: '' }; renderLogin();
+    try {
+      await authCall('otp', { email, create_user: true });
+      login = { step: 'code', email, busy: false, msg: '' };
+      toast('Koden er sendt');
+    } catch (err) {
+      login.busy = false;
+      login.msg = err.status === 429 ? 'For mange forsøk. Vent litt og prøv igjen.' : 'Kunne ikke sende kode: ' + err.message;
+    }
+    renderLogin();
+  }
+  async function verifyCode() {
+    const token = (document.getElementById('login-code').value || '').replace(/\D/g, '');
+    if (token.length < 6) { login.msg = 'Skriv inn hele koden fra e-posten.'; return renderLogin(); }
+    login.busy = true; login.msg = ''; renderLogin();
+    try {
+      storeSession(await authCall('verify', { type: 'email', email: login.email, token }));
+      login = { step: 'email', email: '', busy: false, msg: '' };
+      moreView = 'main';
+      cloud = null; renderMore();
+      await loadCloud();
+      toast(cloud && cloud.me ? `Velkommen, ${cloud.me.name.split(' ')[0]}!` : 'Du er logget inn');
+    } catch (err) {
+      login.busy = false;
+      login.msg = 'Koden virket ikke. Sjekk at den er riktig, eller be om en ny.';
+      renderLogin();
+    }
+  }
+
+  // ---------- Brukerregister ----------
+  function lvlChips(id) {
+    const m = cloud.members.find(x => x.id === id);
+    if (m && m.is_superadmin) return '<span class="lvl admin">Hovedadmin</span>';
+    const acc = memberAccess(id);
+    return acc.length ? acc.map(a => `<span class="lvl ${a.level}">${esc((unitById[a.unit_id] || {}).short || a.unit_id)}: ${LEVELS[a.level]}</span>`).join('') : '<span class="lvl">Ingen tilgang</span>';
+  }
+  function renderUsers() {
+    const q = userSearch.trim().toLowerCase();
+    const list = cloud.members.filter(m => !q || m.name.toLowerCase().includes(q) || m.email.includes(q));
+    document.getElementById('more-content').innerHTML = `
+      ${sheetHead('Brukere og tilgang', 'main')}
+      <div class="users-tools">
+        <input type="search" id="user-search" placeholder="Søk etter navn eller e-post" value="${esc(userSearch)}">
+        <button type="button" class="btn-primary" data-action="user-new">+ Ny bruker</button>
+      </div>
+      <div class="group">
+        ${list.length ? list.map(m => {
+          const roles = memberRoleIds(m.id).map(id => roleById[id]).filter(Boolean).map(r => r.name).join(', ');
+          return `<button type="button" class="row user-row${m.active ? '' : ' inactive'}" data-action="user-open" data-val="${m.id}">
+            <span class="avatar">${esc(initials(m.name))}</span>
+            <span class="row-text"><b>${esc(m.name)}${m.active ? '' : ' (deaktivert)'}</b><small>${esc(m.email)}</small>
+              <span class="lvls">${lvlChips(m.id)}</span>${roles ? `<small>${esc(roles)}</small>` : ''}</span>${CHEV}</button>`;
+        }).join('') : '<p class="empty-row">Ingen brukere funnet.</p>'}
+      </div>
+      <p class="hint pad-x">Admin kan legge til brukere og gi tilgang i enhetene de selv er admin for. Brukeren logger inn med e-postadressen sin.</p>`;
+  }
+  function openUser(id) {
+    const m = id ? cloud.members.find(x => x.id === id) : null;
+    const access = {};
+    D.units.forEach(u => { access[u.id] = ''; });
+    if (m) memberAccess(m.id).forEach(a => { access[a.unit_id] = a.level; });
+    userDraft = {
+      id: m ? m.id : null, name: m ? m.name : '', email: m ? m.email : '',
+      is_superadmin: m ? m.is_superadmin : false, active: m ? m.active : true,
+      access, roles: new Set(m ? memberRoleIds(m.id) : []), armed: false, busy: false, msg: ''
+    };
+    moreView = 'user'; renderMore();
+  }
+  function renderUserEdit() {
+    const d = userDraft;
+    const unitBlock = u => {
+      const canAdmin = myAccess(u.id) === 'admin';
+      const lvl = d.access[u.id] || '';
+      const roles = cloud.roles.filter(r => r.unit_id === u.id && (r.active || d.roles.has(r.id)));
+      return `<div class="unit-block${canAdmin ? '' : ' locked'}">
+        <div class="unit-block-head"><b>${esc(u.name)}</b>${canAdmin ? '' : '<small>Bare admin i denne enheten kan endre</small>'}</div>
+        <div class="seg-tabs" role="group" aria-label="Tilgang i ${esc(u.name)}">
+          ${[['', 'Ingen'], ['reader', 'Leser'], ['editor', 'Redaktør'], ['admin', 'Admin']].map(([v, l]) =>
+            `<button type="button" class="${lvl === v ? 'on' : ''}" data-action="user-lvl" data-unit="${u.id}" data-val="${v}"${canAdmin ? '' : ' disabled'} aria-pressed="${lvl === v}">${l}</button>`).join('')}
+        </div>
+        ${lvl ? `<p class="hint">${LEVELS[lvl]} ${LEVEL_HELP[lvl]}.</p>` : ''}
+        ${roles.length ? `<div class="role-checks">${roles.map(r => `<label class="role-check${d.roles.has(r.id) ? ' on' : ''}">
+            <input type="checkbox" data-role-check="${r.id}"${d.roles.has(r.id) ? ' checked' : ''}${canAdmin ? '' : ' disabled'}>
+            <span>${esc(r.name)}${r.styre ? '' : ' <small>(utenfor styret)</small>'}</span></label>`).join('')}</div>` : ''}
+      </div>`;
+    };
+    document.getElementById('more-content').innerHTML = `
+      ${sheetHead(d.id ? 'Rediger bruker' : 'Ny bruker', 'users')}
+      <div class="task-form">
+        <label class="field"><span>Navn</span><input type="text" id="u-name" value="${esc(d.name)}" autocomplete="off" placeholder="Fornavn Etternavn"></label>
+        <label class="field"><span>E-post (brukes til innlogging)</span><input type="email" id="u-email" value="${esc(d.email)}" autocomplete="off" inputmode="email" placeholder="navn@eksempel.no"></label>
+        <fieldset class="form-block">
+          <legend>Tilgang og verv</legend>
+          <p class="hint">Velg tilgang per enhet, og huk av vervene personen har.</p>
+          ${D.units.map(unitBlock).join('')}
+        </fieldset>
+        ${isSuper() ? `<label class="toggle"><input type="checkbox" id="u-super"${d.is_superadmin ? ' checked' : ''}><span class="toggle-track" aria-hidden="true"></span><span>Hovedadmin (full tilgang til alt)</span></label>` : ''}
+        ${isSuper() && d.id ? `<label class="toggle"><input type="checkbox" id="u-active"${d.active ? ' checked' : ''}><span class="toggle-track" aria-hidden="true"></span><span>Aktiv (kan logge inn)</span></label>` : ''}
+        ${d.msg ? `<p class="form-error" role="alert">${esc(d.msg)}</p>` : ''}
+        <div class="form-actions">
+          ${isSuper() && d.id && d.id !== cloud.me.id ? `<button type="button" class="btn-danger" data-action="user-delete">${d.armed ? 'Trykk igjen for å slette' : 'Slett bruker'}</button>` : '<span></span>'}
+          <div class="form-actions-right">
+            <button type="button" class="btn-secondary" data-action="more-view" data-val="users">Avbryt</button>
+            <button type="button" class="btn-primary" data-action="user-save"${d.busy ? ' disabled' : ''}>${d.busy ? 'Lagrer …' : 'Lagre'}</button>
+          </div>
+        </div>
+      </div>`;
+  }
+  function readUserForm() {
+    const d = userDraft;
+    const v = id => { const el = document.getElementById(id); return el ? el : null; };
+    if (v('u-name')) d.name = v('u-name').value;
+    if (v('u-email')) d.email = v('u-email').value;
+    if (v('u-super')) d.is_superadmin = v('u-super').checked;
+    if (v('u-active')) d.active = v('u-active').checked;
+  }
+  async function saveUser() {
+    readUserForm();
+    const d = userDraft;
+    const name = d.name.trim(), email = d.email.trim().toLowerCase();
+    const fail = msg => { d.msg = msg; d.busy = false; renderUserEdit(); };
+    if (!name) return fail('Skriv inn navnet.');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail('Skriv en gyldig e-postadresse.');
+    if (!d.id && !Object.values(d.access).some(Boolean) && !d.is_superadmin) return fail('Gi tilgang til minst én enhet.');
+    d.busy = true; d.msg = ''; renderUserEdit();
+    try {
+      let id = d.id;
+      const fields = { name, email };
+      if (isSuper()) { fields.is_superadmin = d.is_superadmin; if (d.id) fields.active = d.active; }
+      if (id) {
+        const old = cloud.members.find(m => m.id === id);
+        if (old.name !== name || old.email !== email || (isSuper() && (old.is_superadmin !== d.is_superadmin || old.active !== d.active))) {
+          await rest(`members?id=eq.${id}`, { method: 'PATCH', body: fields, prefer: 'return=minimal' });
+        }
+      } else {
+        const rows = await rest('members', { method: 'POST', body: fields, prefer: 'return=representation' });
+        id = rows[0].id;
+      }
+      // Tilgang: bare enheter jeg er admin for
+      const oldAcc = d.id ? memberAccess(d.id) : [];
+      for (const u of D.units) {
+        if (myAccess(u.id) !== 'admin') continue;
+        const want = d.access[u.id] || '';
+        const had = (oldAcc.find(a => a.unit_id === u.id) || {}).level || '';
+        if (want === had) continue;
+        if (!want) await rest(`member_access?member_id=eq.${id}&unit_id=eq.${u.id}`, { method: 'DELETE', prefer: 'return=minimal' });
+        else await rest('member_access', { method: 'POST', body: { member_id: id, unit_id: u.id, level: want }, prefer: 'resolution=merge-duplicates,return=minimal' });
+      }
+      // Verv: bare i enheter jeg er admin for
+      const oldRoles = new Set(d.id ? memberRoleIds(d.id) : []);
+      for (const r of cloud.roles) {
+        if (myAccess(r.unit_id) !== 'admin') continue;
+        const want = d.roles.has(r.id), had = oldRoles.has(r.id);
+        if (want === had) continue;
+        if (want) await rest('member_roles', { method: 'POST', body: { member_id: id, role_id: r.id }, prefer: 'resolution=ignore-duplicates,return=minimal' });
+        else await rest(`member_roles?member_id=eq.${id}&role_id=eq.${encodeURIComponent(r.id)}`, { method: 'DELETE', prefer: 'return=minimal' });
+      }
+      await loadCloud();
+      toast(d.id ? 'Brukeren er lagret' : `${name} er lagt til`);
+      moreView = 'users'; renderMore();
+    } catch (err) { fail(err.message); }
+  }
+  async function deleteUser() {
+    const d = userDraft;
+    if (!d.armed) { readUserForm(); d.armed = true; return renderUserEdit(); }
+    try {
+      await rest(`members?id=eq.${d.id}`, { method: 'DELETE', prefer: 'return=minimal' });
+      await loadCloud();
+      toast('Brukeren er slettet');
+      moreView = 'users'; renderMore();
+    } catch (err) { d.msg = err.message; d.armed = false; renderUserEdit(); }
+  }
+
+  // ---------- Verv ----------
+  function renderRoles() {
+    const units = (cloud.units.length ? cloud.units : D.units);
+    document.getElementById('more-content').innerHTML = `
+      ${sheetHead('Verv', 'main')}
+      <p class="hint pad-x">Oppgaver knyttes til verv. Når noen går av, gir du vervet til den nye personen under «Brukere og tilgang». Verv som ikke brukes lenger, skjules i stedet for å slettes.</p>
+      ${units.map(u => {
+        const canAdmin = myAccess(u.id) === 'admin';
+        const roles = cloud.roles.filter(r => r.unit_id === u.id);
+        const roleRow = r => `<div class="role-row${r.active ? '' : ' inactive'}">
+          <input type="text" value="${esc(r.name)}" data-role-name="${esc(r.id)}"${canAdmin ? '' : ' disabled'} aria-label="Navn på verv">
+          <label class="mini-toggle" title="I styret"><input type="checkbox" data-role-styre="${esc(r.id)}"${r.styre ? ' checked' : ''}${canAdmin ? '' : ' disabled'}><span>Styret</span></label>
+          <label class="mini-toggle" title="Vises i appen"><input type="checkbox" data-role-active="${esc(r.id)}"${r.active ? ' checked' : ''}${canAdmin ? '' : ' disabled'}><span>Aktiv</span></label>
+          <small class="role-holders">${esc(roleHolders(r.id).join(', ') || '–')}</small>
+        </div>`;
+        return `<section class="sheet-section">
+          <h3>${esc(u.name)}${canAdmin ? '' : ' · bare visning'}</h3>
+          <div class="group pad roles-group">
+            ${roles.map(roleRow).join('') || '<p class="hint">Ingen verv ennå.</p>'}
+            ${canAdmin ? `<div class="role-add">
+              <input type="text" id="new-role-${u.id}" placeholder="Nytt verv, f.eks. Dommerkontakt">
+              <label class="mini-toggle"><input type="checkbox" id="new-role-styre-${u.id}" checked><span>Styret</span></label>
+              <button type="button" class="btn-add" data-action="role-add" data-unit="${u.id}">Legg til</button>
+            </div>` : ''}
+          </div>
+        </section>`;
+      }).join('')}`;
+  }
+  async function patchRole(id, body) {
+    try {
+      await rest(`roles?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', body, prefer: 'return=minimal' });
+      await loadCloud();
+      toast('Vervet er oppdatert');
+    } catch (err) { toast(err.message); renderMore(); }
+  }
+  async function addRole(unit) {
+    const input = document.getElementById('new-role-' + unit);
+    const name = input.value.trim();
+    if (!name) { input.focus(); return; }
+    const styre = document.getElementById('new-role-styre-' + unit).checked;
+    const sort = Math.max(0, ...cloud.roles.map(r => r.sort || 0)) + 1;
+    try {
+      await rest('roles', { method: 'POST', body: { unit_id: unit, name, styre, sort }, prefer: 'return=minimal' });
+      await loadCloud();
+      toast(`«${name}» er lagt til`);
+    } catch (err) { toast(err.message); }
+  }
+
+  // Felter i Mer-panelet
+  document.getElementById('more').addEventListener('input', e => {
+    if (e.target.id === 'user-search') {
+      userSearch = e.target.value;
+      const pos = e.target.selectionStart;
+      renderUsers();
+      const el = document.getElementById('user-search'); el.focus(); el.setSelectionRange(pos, pos);
+    }
+  });
+  document.getElementById('more').addEventListener('change', e => {
+    const t = e.target;
+    if (t.dataset.roleCheck && userDraft) {
+      readUserForm();
+      if (t.checked) userDraft.roles.add(t.dataset.roleCheck); else userDraft.roles.delete(t.dataset.roleCheck);
+      renderUserEdit();
+    }
+    if (t.dataset.roleName) { const v = t.value.trim(); if (v) patchRole(t.dataset.roleName, { name: v }); }
+    if (t.dataset.roleStyre) patchRole(t.dataset.roleStyre, { styre: t.checked });
+    if (t.dataset.roleActive) patchRole(t.dataset.roleActive, { active: t.checked });
+  });
+  document.getElementById('more').addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    if (e.target.id === 'login-email') { e.preventDefault(); sendCode(); }
+    if (e.target.id === 'login-code') { e.preventDefault(); verifyCode(); }
+    if (e.target.id && e.target.id.startsWith('new-role-') && !e.target.id.startsWith('new-role-styre')) { e.preventDefault(); addRole(e.target.id.slice(9)); }
+  });
+
+  function handleCloudAction(a, el) {
+    const val = el.dataset.val;
+    if (a === 'login') { login = { step: 'email', email: '', busy: false, msg: '' }; moreView = 'login'; renderMore(); return true; }
+    if (a === 'send-code') { sendCode(); return true; }
+    if (a === 'verify-code') { verifyCode(); return true; }
+    if (a === 'login-change') { login = { step: 'email', email: login.email, busy: false, msg: '' }; renderLogin(); return true; }
+    if (a === 'logout') {
+      const token = session && session.access_token;
+      logoutLocal();
+      if (token) authCall('logout', {}, token).catch(() => {});
+      moreView = 'main'; renderMore(); toast('Du er logget ut'); return true;
+    }
+    if (a === 'cloud-reload') { cloudError = ''; cloud = null; renderMore(); loadCloud(); return true; }
+    if (a === 'show-mine') { state.role = 'mine'; saveState(); closeDialog('more'); render(); return true; }
+    if (a === 'more-view') { moreView = val; armed = null; renderMore(); return true; }
+    if (a === 'users') { moreView = 'users'; renderMore(); return true; }
+    if (a === 'roles') { moreView = 'roles'; renderMore(); return true; }
+    if (a === 'user-open') { openUser(val); return true; }
+    if (a === 'user-new') { openUser(null); return true; }
+    if (a === 'user-lvl') { readUserForm(); userDraft.access[el.dataset.unit] = val; userDraft.armed = false; renderUserEdit(); return true; }
+    if (a === 'user-save') { saveUser(); return true; }
+    if (a === 'user-delete') { deleteUser(); return true; }
+    if (a === 'role-add') { addRole(el.dataset.unit); return true; }
+    return false;
+  }
+
   // ---------- «Mer»-panelet ----------
   let armed = null;   // to-trinns bekreftelse: 'reset-done' | 'reset-tasks'
 
   function renderMore() {
+    if (moreView === 'login') return renderLogin();
+    if (moreView === 'users') return renderUsers();
+    if (moreView === 'user') return renderUserEdit();
+    if (moreView === 'roles') return renderRoles();
     const p = themePref();
     const nDone = Object.keys(done).length;
     const themeBtn = (val, icon, label) => `<button type="button" data-action="theme" data-theme-val="${val}" class="${p === val ? 'on' : ''}" aria-pressed="${p === val}">${ico(icon)}${label}</button>`;
@@ -595,10 +1063,7 @@
 
       <section class="sheet-section">
         <h3>Min profil</h3>
-        <div class="group">
-          ${row('user', 'Logg inn', 'Med kode på e-post – ingen passord å huske', { soon: 'Steg 2' })}
-          ${row('star', 'Mine verv og oppgaver', 'Start appen med bare dine oppgaver', { soon: 'Steg 3' })}
-        </div>
+        ${profileHtml()}
       </section>
 
       <section class="sheet-section">
@@ -625,8 +1090,11 @@
       <section class="sheet-section">
         <h3>Administrasjon</h3>
         <div class="group">
-          ${row('users', 'Brukere og tilgang', 'Legg til brukere, gi admin- eller lesetilgang', { soon: 'Steg 2' })}
-          ${row('tag', 'Verv', 'Opprett, endre og fordel verv', { soon: 'Steg 2' })}
+          ${isAnyAdmin()
+            ? row('users', 'Brukere og tilgang', 'Legg til brukere, gi admin-, redaktør- eller lesetilgang, og fordel verv', { action: 'users' }) +
+              row('tag', 'Verv', 'Opprett, endre navn eller skjul verv', { action: 'roles' })
+            : row('users', 'Brukere og tilgang', 'For administratorer – logg inn først', { soon: 'Admin' }) +
+              row('tag', 'Verv', 'For administratorer – logg inn først', { soon: 'Admin' })}
           ${row('copy', 'Ny sesong', 'Velg hvilke faste oppgaver som skal være med – avkrysninger nullstilles', { soon: 'Steg 5' })}
         </div>
       </section>
@@ -676,7 +1144,7 @@
     const dlg = document.getElementById(id);
     if (dlg.close) dlg.close(); else dlg.removeAttribute('open');
   }
-  function openMore() { armed = null; renderMore(); openDialog('more'); }
+  function openMore(view) { armed = null; moreView = view || 'main'; renderMore(); openDialog('more'); }
   ['more', 'task-form'].forEach(id => {
     document.getElementById(id).addEventListener('click', e => { if (e.target.id === id) closeDialog(id); });
   });
@@ -1023,6 +1491,7 @@
       d.id = null; d.title = t.title + ' (kopi)';
       openForm(d);
     } else if (a === 'close-form') closeDialog('task-form');
+    else if (handleCloudAction(a, el)) return;
     else if (a === 'more') openMore();
     else if (a === 'close-more') closeDialog('more');
     else if (a === 'theme') {
@@ -1122,4 +1591,5 @@
 
   rebuild();
   render();
+  if (cloudReady && session) loadCloud();
 })();

@@ -1,0 +1,24 @@
+# Supabase (gratisplanen) setter prosjektet på pause etter en uke uten bruk.
+# Denne jobben spør databasen to ganger i uken, så den holder seg våken.
+# Adressen og den offentlige nøkkelen hentes fra config.js.
+name: Hold Supabase våken
+
+on:
+  schedule:
+    - cron: '23 6 * * 1,4'   # mandag og torsdag kl. 06:23 UTC
+  workflow_dispatch:          # kan også kjøres for hånd under Actions
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Spør databasen
+        run: |
+          url=$(grep -o "supabaseUrl: *'[^']*'" config.js | sed "s/.*'\(.*\)'/\1/")
+          key=$(grep -o "supabaseKey: *'[^']*'" config.js | sed "s/.*'\(.*\)'/\1/")
+          if [ -z "$url" ] || [ -z "$key" ]; then echo "Supabase er ikke satt opp i config.js ennå"; exit 0; fi
+          status=$(curl -s -o /dev/null -w '%{http_code}' -H "apikey: $key" "$url/rest/v1/units?select=id&limit=1")
+          echo "Svar fra Supabase: $status"
+          # 401 er riktig: uten innlogging får man ikke se noe, men databasen ble spurt.
+          if [ "$status" -ge 500 ]; then exit 1; fi
