@@ -1,28 +1,40 @@
 /* =========================================================
-   Tune IL årshjul – steg 1: hjul, månedsliste og filter
+   Tune IL årshjul – hjul, månedsliste, filter og oppgaveskjema
+   Foreløpig lagres alt på denne enheten (localStorage).
    ========================================================= */
 (function () {
   'use strict';
 
   const D = window.ARSHJUL_DATA;
+  const VERSION = '0.5';
   const MONTHS = ['januar', 'februar', 'mars', 'april', 'mai', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'desember'];
   const MONTHS_SHORT = ['JAN', 'FEB', 'MAR', 'APR', 'MAI', 'JUN', 'JUL', 'AUG', 'SEP', 'OKT', 'NOV', 'DES'];
   const WEEKDAYS = ['søndag', 'mandag', 'tirsdag', 'onsdag', 'torsdag', 'fredag', 'lørdag'];
   const STATE_KEY = 'arshjul-visning';
   const DONE_KEY = 'arshjul-gjort-' + D.season.label;
+  const TASKS_KEY = 'arshjul-oppgaver-' + D.season.label;
   const CHECK_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+
+  const REPEAT = {
+    yearly:    { step: 0, label: 'Hvert år' },
+    once:      { step: 0, label: 'Bare denne sesongen' },
+    quarterly: { step: 3, label: 'Hvert kvartal' },
+    bimonthly: { step: 2, label: 'Annenhver måned' },
+    monthly:   { step: 1, label: 'Hver måned' }
+  };
+  const UNIT_WORD = { days: ['dag', 'dager'], weeks: ['uke', 'uker'], months: ['måned', 'måneder'] };
 
   const unitById = Object.fromEntries(D.units.map(u => [u.id, u]));
   const roleById = Object.fromEntries(D.roles.map(r => [r.id, r]));
-  const taskById = Object.fromEntries(D.tasks.map(t => [t.id, t]));
 
-  // ---------- Lagring (bare på denne enheten i steg 1) ----------
+  // ---------- Lagring ----------
   function readJSON(key, fallback) {
     try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch (e) { return fallback; }
   }
   function writeJSON(key, value) {
     try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* privat modus o.l. */ }
   }
+  function clone(x) { return JSON.parse(JSON.stringify(x)); }
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -33,10 +45,18 @@
     const y = D.season.startYear + Math.floor((D.season.startMonth - 1 + i) / 12);
     return { m: m0 + 1, y };
   });
+  const seasonStart = new Date(seasonMonths[0].y, seasonMonths[0].m - 1, 1);
+  const seasonEnd = new Date(seasonMonths[11].y, seasonMonths[11].m, 0);
   function monthIndexOf(m) { return (m - D.season.startMonth + 12) % 12; }
   function todayIndex() {
     return seasonMonths.findIndex(s => s.m === today.getMonth() + 1 && s.y === today.getFullYear());
   }
+
+  // Oppgaver: egne endringer på denne enheten, ellers eksempeldataene
+  let customized = !!readJSON(TASKS_KEY, null);
+  let tasks = readJSON(TASKS_KEY, null) || clone(D.tasks);
+  let taskById = {};
+  let occ = [];   // forekomster: én per oppgave per måned den gjelder
 
   const saved = readJSON(STATE_KEY, {});
   const state = {
@@ -52,14 +72,18 @@
   function saveState() {
     writeJSON(STATE_KEY, { units: state.units, role: state.role, view: state.view, hideDone: state.hideDone });
   }
+  function saveTasks() {
+    writeJSON(TASKS_KEY, tasks);
+    customized = true;
+    rebuild();
+  }
 
   // ---------- Dato ----------
   function parseDate(s) {
     const [y, m, d] = s.split('-').map(Number);
     return new Date(y, m - 1, d);
   }
-  function taskMonth(t) { return t.due ? parseDate(t.due).getMonth() + 1 : t.month; }
-  function taskIndex(t) { return monthIndexOf(taskMonth(t)); }
+  function isoDate(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
   function fmtDay(d) { return d.getDate() + '. ' + MONTHS[d.getMonth()]; }
   function fmtLong(d) { return WEEKDAYS[d.getDay()] + ' ' + fmtDay(d) + ' ' + d.getFullYear(); }
   function fmtShort(d) { return String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0'); }
@@ -72,17 +96,66 @@
     if (n < 60) return `om ${Math.round(n / 7)} uker`;
     return `om ${Math.round(n / 30)} mnd`;
   }
-  function subDate(task, sub) {
-    if (!task.due || !sub.before) return null;
-    const d = parseDate(task.due);
-    if (sub.before.months) d.setMonth(d.getMonth() - sub.before.months);
-    if (sub.before.days) d.setDate(d.getDate() - sub.before.days);
+  function shiftBack(date, amount, unit) {
+    const d = new Date(date);
+    if (unit === 'months') d.setMonth(d.getMonth() - amount);
+    else d.setDate(d.getDate() - amount * (unit === 'weeks' ? 7 : 1));
     return d;
   }
-  function relText(before) {
-    if (before.months) return before.months + (before.months === 1 ? ' måned' : ' måneder') + ' før';
-    if (before.days % 7 === 0) { const w = before.days / 7; return w + (w === 1 ? ' uke' : ' uker') + ' før'; }
-    return before.days + ' dager før';
+  function amountText(amount, unit) {
+    const w = UNIT_WORD[unit] || UNIT_WORD.days;
+    return amount + ' ' + (Number(amount) === 1 ? w[0] : w[1]);
+  }
+  // Gamle underoppgaver bruker { months } / { days }
+  function subBefore(s) {
+    if (!s.before) return null;
+    if (s.before.unit) return s.before;
+    if (s.before.months) return { amount: s.before.months, unit: 'months' };
+    if (s.before.days % 7 === 0) return { amount: s.before.days / 7, unit: 'weeks' };
+    return { amount: s.before.days, unit: 'days' };
+  }
+
+  // Fristen til en oppgave (følger kjeden hvis den er relativ til en annen oppgave)
+  function resolveDue(t, seen) {
+    if (!t) return null;
+    if (t.rel) {
+      seen = seen || new Set();
+      if (seen.has(t.id)) return null;
+      seen.add(t.id);
+      const base = resolveDue(taskById[t.rel.task], seen);
+      return base ? shiftBack(base, t.rel.amount, t.rel.unit) : null;
+    }
+    return t.due ? parseDate(t.due) : null;
+  }
+
+  // ---------- Forekomster (gjentakelse) ----------
+  function rebuild() {
+    taskById = Object.fromEntries(tasks.map(t => [t.id, t]));
+    occ = [];
+    tasks.forEach(t => {
+      const base = resolveDue(t);
+      const m = base ? base.getMonth() + 1 : t.month;
+      if (!m) return;
+      const start = monthIndexOf(m);
+      const step = (REPEAT[t.repeat] || REPEAT.yearly).step;
+      const idxs = step ? Array.from({ length: 12 }, (_, i) => i).filter(i => ((i - start) % step + 12) % step === 0) : [start];
+      idxs.forEach(i => {
+        let due = null;
+        if (base) {
+          if (i === start) due = base;
+          else {
+            const sm = seasonMonths[i];
+            const last = new Date(sm.y, sm.m, 0).getDate();
+            due = new Date(sm.y, sm.m - 1, Math.min(base.getDate(), last));
+          }
+        }
+        occ.push({
+          t, idx: i, due,
+          key: step ? `${t.id}@${i}` : t.id,
+          opens: !step && t.opens ? parseDate(t.opens) : null
+        });
+      });
+    });
   }
 
   // ---------- Filtrering ----------
@@ -91,18 +164,18 @@
     if (state.role !== 'alle' && t.role !== state.role) return false;
     return true;
   }
-  function isVisible(t) { return matchesFilter(t) && !(state.hideDone && done[t.id]); }
-  function sortTasks(a, b) {
-    const da = a.due ? parseDate(a.due).getDate() : 32;
-    const db = b.due ? parseDate(b.due).getDate() : 32;
-    return da - db || a.title.localeCompare(b.title, 'no');
+  function isVisible(o) { return matchesFilter(o.t) && !(state.hideDone && done[o.key]); }
+  function sortOcc(a, b) {
+    const da = a.due ? a.due.getDate() : 32;
+    const db = b.due ? b.due.getDate() : 32;
+    return da - db || a.t.title.localeCompare(b.t.title, 'no');
   }
-  function tasksForMonth(i, all) {
-    return D.tasks.filter(t => taskIndex(t) === i && (all ? matchesFilter(t) : isVisible(t))).sort(sortTasks);
+  function occForMonth(i, all) {
+    return occ.filter(o => o.idx === i && (all ? matchesFilter(o.t) : isVisible(o))).sort(sortOcc);
   }
 
   function esc(s) {
-    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
   function roleLabel(id) {
     const r = roleById[id];
@@ -113,43 +186,35 @@
   function renderHero() {
     document.getElementById('season-label').textContent = D.season.label;
 
-    const mine = D.tasks.filter(matchesFilter);
-    const nDone = mine.filter(t => done[t.id]).length;
+    const mine = occ.filter(o => matchesFilter(o.t));
+    const nDone = mine.filter(o => done[o.key]).length;
     const pct = mine.length ? Math.round(nDone / mine.length * 100) : 0;
     document.getElementById('season-progress').innerHTML =
       `<span><b>${nDone}</b> av ${mine.length} gjort</span><span class="progress-bar"><i style="width:${pct}%"></i></span><span>${pct} %</span>`;
 
-    const dated = mine.filter(t => t.due && !done[t.id]).map(t => ({ t, d: parseDate(t.due) }));
-    const late = dated.filter(x => x.d < today).sort((a, b) => a.d - b.d);
-    const next = dated.filter(x => x.d >= today).sort((a, b) => a.d - b.d).slice(0, late.length ? 4 : 5);
+    const dated = mine.filter(o => o.due && !done[o.key]);
+    const late = dated.filter(o => o.due < today).sort((a, b) => a.due - b.due);
+    const next = dated.filter(o => o.due >= today).sort((a, b) => a.due - b.due).slice(0, late.length ? 4 : 5);
 
     let html = '';
     if (late.length) {
-      const first = late[0].t;
-      html += `<button type="button" class="up-card late" data-action="goto" data-task="${first.id}" style="--type:${D.types.frist.color}">
+      const first = late[0];
+      html += `<button type="button" class="up-card late" data-action="goto" data-task="${esc(first.key)}" style="--type:${D.types.frist.color}">
         <span class="up-when">${late.length} ${late.length === 1 ? 'forfalt frist' : 'forfalte frister'}</span>
-        <span class="up-title">${esc(first.title)}${late.length > 1 ? ' m.fl.' : ''}</span>
+        <span class="up-title">${esc(first.t.title)}${late.length > 1 ? ' m.fl.' : ''}</span>
         <span class="up-meta">Ikke krysset av</span></button>`;
     }
-    html += next.map(({ t, d }) => `<button type="button" class="up-card" data-action="goto" data-task="${t.id}" style="--type:${D.types[t.type].color}">
-        <span class="up-when">${untilText(daysUntil(d))}</span>
-        <span class="up-title">${esc(t.title)}</span>
-        <span class="up-meta">${fmtDay(d)} · ${esc(roleById[t.role].name)}</span></button>`).join('');
+    html += next.map(o => `<button type="button" class="up-card" data-action="goto" data-task="${esc(o.key)}" style="--type:${D.types[o.t.type].color}">
+        <span class="up-when">${untilText(daysUntil(o.due))}</span>
+        <span class="up-title">${esc(o.t.title)}</span>
+        <span class="up-meta">${fmtDay(o.due)} · ${esc(roleById[o.t.role] ? roleById[o.t.role].name : '')}</span></button>`).join('');
     document.getElementById('upcoming').innerHTML = html || '<p class="up-empty">Ingen kommende frister for dette filteret.</p>';
   }
 
   // ---------- Filter-UI ----------
-  function renderFilters() {
-    document.getElementById('unit-chips').innerHTML = D.units.map(u => {
-      const on = state.units.includes(u.id);
-      return `<button type="button" class="chip${on ? ' on' : ''}" data-action="unit" data-unit="${u.id}" aria-pressed="${on}">
-        <span class="chip-check" aria-hidden="true">${on ? '✓' : ''}</span>${esc(u.name)}</button>`;
-    }).join('');
-
-    // Verv vises bare for enheter som er slått på
-    const sel = document.getElementById('role-select');
-    let html = '<option value="alle">Alle verv</option>';
-    D.units.filter(u => state.units.includes(u.id)).forEach(u => {
+  function roleOptions(onlyUnits) {
+    let html = '';
+    D.units.filter(u => !onlyUnits || onlyUnits.includes(u.id)).forEach(u => {
       const opt = r => `<option value="${r.id}">${esc(r.name)}</option>`;
       const styre = D.roles.filter(r => r.unit === u.id && r.styre !== false);
       const andre = D.roles.filter(r => r.unit === u.id && r.styre === false);
@@ -157,7 +222,18 @@
       if (styre.length) html += `<optgroup label="${esc(u.name)} – ${styreNavn}">` + styre.map(opt).join('') + '</optgroup>';
       if (andre.length) html += `<optgroup label="${esc(u.name)} – andre">` + andre.map(opt).join('') + '</optgroup>';
     });
-    sel.innerHTML = html;
+    return html;
+  }
+
+  function renderFilters() {
+    document.getElementById('unit-chips').innerHTML = D.units.map(u => {
+      const on = state.units.includes(u.id);
+      return `<button type="button" class="chip${on ? ' on' : ''}" data-action="unit" data-unit="${u.id}" aria-pressed="${on}">
+        <span class="chip-check" aria-hidden="true">${on ? '✓' : ''}</span>${esc(u.name)}</button>`;
+    }).join('');
+
+    const sel = document.getElementById('role-select');
+    sel.innerHTML = '<option value="alle">Alle verv</option>' + roleOptions(state.units);
     if (state.role !== 'alle' && !state.units.includes(roleById[state.role].unit)) state.role = 'alle';
     sel.value = state.role;
 
@@ -194,7 +270,6 @@
     const [x1, y1] = pt(r, bottom ? a2 : a1), [x2, y2] = pt(r, bottom ? a1 : a2);
     return `M${f(x1)} ${f(y1)} A${r} ${r} 0 0 ${bottom ? 0 : 1} ${f(x2)} ${f(y2)}`;
   }
-  // Vinkel for en dato i hjulet
   function dateAngle(d) {
     const i = seasonMonths.findIndex(s => s.m === d.getMonth() + 1 && s.y === d.getFullYear());
     if (i < 0) return null;
@@ -211,8 +286,7 @@
     </defs>`;
 
     // Ukestreker langs kanten
-    const start = new Date(D.season.startYear, D.season.startMonth - 1, 1);
-    for (let d = new Date(start); ; d.setDate(d.getDate() + 7)) {
+    for (let d = new Date(seasonStart); ; d.setDate(d.getDate() + 7)) {
       const a = dateAngle(d);
       if (a === null) break;
       const [x1, y1] = pt(R_OUT + 3, a), [x2, y2] = pt(R_OUT + 7, a);
@@ -222,7 +296,7 @@
     seasonMonths.forEach((sm, i) => {
       const a1 = i * 30 + 0.7, a2 = (i + 1) * 30 - 0.7;
       const sel = i === state.month;
-      const list = tasksForMonth(i);
+      const list = occForMonth(i);
       const label = `${MONTHS[sm.m - 1]} ${sm.y}, ${list.length} oppgaver`;
       out += `<g class="seg${sel ? ' sel' : ''}${i === ti ? ' now' : ''}" data-month="${i}" role="button" tabindex="0" aria-label="${label}" aria-pressed="${sel}">`;
       out += `<path class="seg-body" d="${arc(R_IN + 5, R_RIM - 2, a1, a2)}"/>`;
@@ -236,12 +310,12 @@
       for (const row of rows) {
         const inRow = Math.min(row.n, list.length - k);
         for (let c = 0; c < inRow; c++, k++) {
-          const t = list[k];
+          const o = list[k];
           const [x, y] = pt(row.r, i * 30 + 15 + (c - (inRow - 1) / 2) * row.s);
           const more = k === max - 1 && list.length > max;
           out += more
             ? `<text class="seg-more" x="${f(x)}" y="${f(y)}">+${list.length - max + 1}</text>`
-            : `<circle class="dot${done[t.id] ? ' done' : ''}" cx="${f(x)}" cy="${f(y)}" r="5.2" fill="${D.types[t.type].color}"/>`;
+            : `<circle class="dot${done[o.key] ? ' done' : ''}" cx="${f(x)}" cy="${f(y)}" r="5.2" fill="${D.types[o.t.type].color}"/>`;
         }
       }
       out += '</g>';
@@ -257,8 +331,8 @@
 
     // Midten: valgt måned og fremdrift for måneden
     const sm = seasonMonths[state.month];
-    const all = tasksForMonth(state.month, true);
-    const nDone = all.filter(t => done[t.id]).length;
+    const all = occForMonth(state.month, true);
+    const nDone = all.filter(o => done[o.key]).length;
     const rP = R_IN - 7, circ = 2 * Math.PI * rP;
     const frac = all.length ? nDone / all.length : 0;
     out += `<circle class="hub" cx="${C}" cy="${C}" r="${R_IN}"/>`;
@@ -272,88 +346,101 @@
   }
 
   // ---------- Oppgavekort ----------
-  function dateBox(t) {
-    if (t.due) {
-      const d = parseDate(t.due);
-      return `<span class="datebox"><b>${d.getDate()}</b><span>${MONTHS_SHORT[d.getMonth()]}</span></span>`;
-    }
-    return `<span class="datebox nodate"><b>${t.dateTbd ? '?' : '–'}</b><span>${MONTHS_SHORT[t.month - 1]}</span></span>`;
+  function dateBox(o) {
+    if (o.due) return `<span class="datebox"><b>${o.due.getDate()}</b><span>${MONTHS_SHORT[o.due.getMonth()]}</span></span>`;
+    const m = seasonMonths[o.idx].m;
+    return `<span class="datebox nodate"><b>${o.t.dateTbd ? '?' : '–'}</b><span>${MONTHS_SHORT[m - 1]}</span></span>`;
   }
-  function badge(t) {
-    if (done[t.id]) return '';
-    if (t.dateTbd) return '<span class="badge tbd">Dato kommer</span>';
-    if (!t.due) return '';
-    const n = daysUntil(parseDate(t.due));
+  function badge(o) {
+    if (done[o.key]) return '';
+    if (o.t.dateTbd) return '<span class="badge tbd">Dato kommer</span>';
+    if (!o.due) return '';
+    if (o.opens && o.opens <= today && o.due >= today) return '<span class="badge open">Åpen nå</span>';
+    const n = daysUntil(o.due);
     if (n < 0) return '<span class="badge late">Forfalt</span>';
     if (n <= 14) return `<span class="badge soon">${untilText(n)}</span>`;
     return '';
   }
 
-  function taskCard(t) {
-    const tp = D.types[t.type];
-    const isDone = !!done[t.id];
-    const open = state.open === t.id;
-    // Vis enhetene bare når de sier noe mer enn vervet gjør
+  function taskCard(o) {
+    const t = o.t;
+    const tp = D.types[t.type] || D.types.rutine;
+    const isDone = !!done[o.key];
+    const open = state.open === o.key;
     const roleUnit = roleById[t.role] && roleById[t.role].unit;
     const showUnits = !(t.units.length === 1 && t.units[0] === roleUnit);
     const unitsHtml = !showUnits ? '' : t.units.map(u => `<span class="unit-tag">${esc(unitById[u].short)}</span>`).join('');
     const subCount = t.sub ? t.sub.length : 0;
+    const rep = t.repeat && REPEAT[t.repeat] && REPEAT[t.repeat].step ? `<span class="repeat-tag">↻ ${REPEAT[t.repeat].label.toLowerCase()}</span>` : '';
 
     let details = '';
     if (open) {
       details += '<div class="task-details">';
-      if (t.due) details += `<p class="detail-due">Frist ${fmtLong(parseDate(t.due))}</p>`;
-      else if (t.dateTbd) details += `<p class="detail-due">Dato kommer (${MONTHS[t.month - 1]})</p>`;
-      if (t.description) details += `<p>${esc(t.description)}</p>`;
-      if (t.sub) {
+      if (o.opens) details += `<p class="detail-due">Åpner ${fmtLong(o.opens)}<br>Frist ${fmtLong(o.due)}</p>`;
+      else if (o.due) details += `<p class="detail-due">Frist ${fmtLong(o.due)}</p>`;
+      else if (t.dateTbd) details += `<p class="detail-due">Dato kommer (${MONTHS[seasonMonths[o.idx].m - 1]})</p>`;
+      if (t.rel && taskById[t.rel.task]) details += `<p class="link-note">Fristen er ${amountText(t.rel.amount, t.rel.unit)} før <button type="button" class="linklike" data-action="goto" data-task="${esc(t.rel.task)}">${esc(taskById[t.rel.task].title)}</button></p>`;
+      if (t.repeat && t.repeat !== 'yearly') details += `<p class="link-note">Gjentakelse: ${REPEAT[t.repeat].label.toLowerCase()}</p>`;
+      if (t.description) details += `<p class="desc">${esc(t.description)}</p>`;
+      if (t.sub && t.sub.length) {
         details += '<h4>Underoppgaver</h4><ul class="subs">' + t.sub.map(s => {
-          const sd = subDate(t, s);
-          const when = s.before ? `<span class="sub-when">${relText(s.before)}${sd ? ' · ca. ' + fmtShort(sd) : ''}</span>` : '';
+          const b = subBefore(s);
+          const sd = b && o.due ? shiftBack(o.due, b.amount, b.unit) : null;
+          const when = b ? `<span class="sub-when">${amountText(b.amount, b.unit)} før${sd ? ' · ca. ' + fmtShort(sd) : ''}</span>` : '';
           return `<li><span>${esc(s.title)}</span>${when}</li>`;
         }).join('') + '</ul>';
       }
-      if (t.prepares && taskById[t.prepares]) {
-        const p = taskById[t.prepares];
-        details += `<p class="link-note">Forbereder: <button type="button" class="linklike" data-action="goto" data-task="${p.id}">${esc(p.title)}</button> (${esc(roleLabel(p.role))})</p>`;
+      const prepTarget = t.prepares && !(t.rel && t.rel.task === t.prepares) ? taskById[t.prepares] : null;
+      if (prepTarget) {
+        details += `<p class="link-note">Forbereder: <button type="button" class="linklike" data-action="goto" data-task="${esc(prepTarget.id)}">${esc(prepTarget.title)}</button> (${esc(roleLabel(prepTarget.role))})</p>`;
       }
-      D.tasks.filter(x => x.prepares === t.id).forEach(p => {
-        details += `<p class="link-note">Forberedes av: <button type="button" class="linklike" data-action="goto" data-task="${p.id}">${esc(p.title)}</button> (${esc(roleLabel(p.role))}${p.due ? ', frist ' + fmtShort(parseDate(p.due)) : ''})</p>`;
+      tasks.filter(x => x.prepares === t.id || (x.rel && x.rel.task === t.id)).forEach(p => {
+        const pd = resolveDue(p);
+        details += `<p class="link-note">Forberedes av: <button type="button" class="linklike" data-action="goto" data-task="${esc(p.id)}">${esc(p.title)}</button> (${esc(roleLabel(p.role))}${pd ? ', frist ' + fmtShort(pd) : ''})</p>`;
       });
-      if (t.links) {
-        details += '<div class="links">' + t.links.map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)} ↗</a>`).join('') + '</div>';
+      if (t.links && t.links.length) {
+        details += '<div class="links">' + t.links.map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label || l.url)} ↗</a>`).join('') + '</div>';
       }
       if (t.source && D.sources && D.sources[t.source]) {
         const s = D.sources[t.source];
         details += `<p class="source-note">Kilde: <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a></p>`;
       }
-      if (isDone) details += `<p class="done-note">✓ Krysset av ${fmtDay(new Date(done[t.id]))}</p>`;
+      if (isDone) details += `<p class="done-note">✓ Krysset av ${fmtDay(new Date(done[o.key]))}</p>`;
+      details += `<div class="task-actions">
+        <button type="button" class="btn-small" data-action="edit" data-task="${esc(t.id)}">Rediger</button>
+        <button type="button" class="btn-small" data-action="copy" data-task="${esc(t.id)}">Kopier</button>
+      </div>`;
       details += '</div>';
     }
 
-    return `<article class="task${isDone ? ' is-done' : ''}${open ? ' open' : ''}" id="task-${t.id}" style="--type:${tp.color}">
-      <button type="button" class="task-head" data-action="open" data-task="${t.id}" aria-expanded="${open}">
-        ${dateBox(t)}
+    return `<article class="task${isDone ? ' is-done' : ''}${open ? ' open' : ''}" id="task-${esc(o.key)}" style="--type:${tp.color}">
+      <button type="button" class="task-head" data-action="open" data-task="${esc(o.key)}" aria-expanded="${open}">
+        ${dateBox(o)}
         <span class="task-body">
           <span class="task-title">${esc(t.title)}</span>
           <span class="task-meta">
             <span class="type-pill">${tp.name}</span>
             <span class="role">${esc(roleLabel(t.role))}</span>
-            ${badge(t)}
+            ${badge(o)}
           </span>
-          ${unitsHtml || subCount ? `<span class="task-meta">
-            ${unitsHtml}
-            ${subCount ? `<span class="sub-count">${subCount} underoppgaver</span>` : ''}
+          ${unitsHtml || subCount || rep ? `<span class="task-meta">
+            ${unitsHtml}${rep}
+            ${subCount ? `<span class="sub-count">${subCount} ${subCount === 1 ? 'underoppgave' : 'underoppgaver'}</span>` : ''}
           </span>` : ''}
         </span>
       </button>
-      <button type="button" class="check" data-action="done" data-task="${t.id}" aria-pressed="${isDone}" aria-label="${isDone ? 'Fjern avkrysning' : 'Merk som gjort'}: ${esc(t.title)}">${CHECK_SVG}</button>
+      <button type="button" class="check" data-action="done" data-task="${esc(o.key)}" aria-pressed="${isDone}" aria-label="${isDone ? 'Fjern avkrysning' : 'Merk som gjort'}: ${esc(t.title)}">${CHECK_SVG}</button>
       ${details}
     </article>`;
   }
 
+  function addButton(i) {
+    const m = MONTHS[seasonMonths[i].m - 1];
+    return `<button type="button" class="add-inline" data-action="new" data-month="${i}"><span>+</span> Legg til i ${m}</button>`;
+  }
   function emptyHtml(i) {
     const sm = seasonMonths[i];
-    const any = D.tasks.some(t => taskIndex(t) === i);
+    const any = occ.some(o => o.idx === i);
     if (sm.m === 7 && !any) return '<p class="empty">Ingen oppgaver i juli. God sommer! ☀️</p>';
     return `<p class="empty">Ingen oppgaver ${any ? 'som passer filteret ' : ''}i ${MONTHS[sm.m - 1]}.</p>`;
   }
@@ -361,13 +448,13 @@
   function renderMonth() {
     const sm = seasonMonths[state.month];
     document.getElementById('month-title').textContent = MONTHS[sm.m - 1] + ' ' + sm.y;
-    const all = tasksForMonth(state.month, true);
-    const nDone = all.filter(t => done[t.id]).length;
+    const all = occForMonth(state.month, true);
+    const nDone = all.filter(o => done[o.key]).length;
     document.getElementById('month-sub').textContent = all.length
       ? `${all.length} ${all.length === 1 ? 'oppgave' : 'oppgaver'} · ${nDone} gjort`
       : 'Ingen oppgaver';
-    const list = tasksForMonth(state.month);
-    document.getElementById('month-tasks').innerHTML = list.length ? list.map(taskCard).join('') : emptyHtml(state.month);
+    const list = occForMonth(state.month);
+    document.getElementById('month-tasks').innerHTML = (list.length ? list.map(taskCard).join('') : emptyHtml(state.month)) + addButton(state.month);
   }
 
   function renderList() {
@@ -375,10 +462,10 @@
     document.getElementById('view-liste').innerHTML =
       `<h2 class="print-title">Tune IL årshjul · sesong ${D.season.label}</h2>` +
       seasonMonths.map((sm, i) => {
-        const list = tasksForMonth(i);
+        const list = occForMonth(i);
         return `<section class="list-month${i === ti ? ' now' : ''}">
           <h3>${MONTHS[sm.m - 1]} ${sm.y}${i === ti ? ' <span class="now-tag">Nå</span>' : ''} <small>${list.length || ''}</small></h3>
-          <div class="task-list">${list.length ? list.map(taskCard).join('') : emptyHtml(i)}</div>
+          <div class="task-list">${list.length ? list.map(taskCard).join('') : emptyHtml(i)}${addButton(i)}</div>
         </section>`;
       }).join('');
   }
@@ -416,31 +503,39 @@
     toastTimer = setTimeout(() => el.remove(), 2600);
   }
 
-  // ---------- Kalenderfil (.ics) ----------
+  // ---------- Filer: kalender og sikkerhetskopi ----------
+  function download(name, text, type) {
+    const blob = new Blob([text], { type });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
   function icsEscape(s) { return String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n'); }
   function icsDate(d) { return d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0'); }
   function downloadIcs() {
-    const list = D.tasks.filter(t => matchesFilter(t) && t.due);
+    const list = occ.filter(o => matchesFilter(o.t) && o.due);
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
     const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Tune IL//Arshjul//NO', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:Tune IL årshjul'];
-    list.forEach(t => {
-      const d = parseDate(t.due), end = new Date(d); end.setDate(end.getDate() + 1);
-      const desc = [roleLabel(t.role), t.description || ''].filter(Boolean).join('\n');
-      lines.push('BEGIN:VEVENT', `UID:${t.id}-${D.season.label.replace('/', '-')}@tune-arshjul`, `DTSTAMP:${stamp}`,
-        `DTSTART;VALUE=DATE:${icsDate(d)}`, `DTEND;VALUE=DATE:${icsDate(end)}`,
-        `SUMMARY:${icsEscape(t.title)}`, `DESCRIPTION:${icsEscape(desc)}`, 'TRANSP:TRANSPARENT', 'END:VEVENT');
+    list.forEach(o => {
+      const end = new Date(o.due); end.setDate(end.getDate() + 1);
+      const desc = [roleLabel(o.t.role), o.t.description || ''].filter(Boolean).join('\n');
+      lines.push('BEGIN:VEVENT', `UID:${o.key.replace('@', '-')}-${D.season.label.replace('/', '-')}@tune-arshjul`, `DTSTAMP:${stamp}`,
+        `DTSTART;VALUE=DATE:${icsDate(o.due)}`, `DTEND;VALUE=DATE:${icsDate(end)}`,
+        `SUMMARY:${icsEscape(o.t.title)}`, `DESCRIPTION:${icsEscape(desc)}`, 'TRANSP:TRANSPARENT', 'END:VEVENT');
     });
     lines.push('END:VCALENDAR');
-    const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'tune-arshjul-' + D.season.label.replace('/', '-') + '.ics';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    download('tune-arshjul-' + D.season.label.replace('/', '-') + '.ics', lines.join('\r\n'), 'text/calendar;charset=utf-8');
     toast(`${list.length} frister lagt i kalenderfilen`);
   }
+  function downloadBackup() {
+    const data = { app: 'tune-arshjul', version: VERSION, season: D.season.label, exported: new Date().toISOString(), tasks, done };
+    download('tune-arshjul-oppgaver-' + isoDate(today) + '.json', JSON.stringify(data, null, 2), 'application/json');
+    toast('Sikkerhetskopi lastet ned');
+  }
 
-  // ---------- «Mer»-panelet ----------
+  // ---------- Ikoner ----------
   const ICONS = {
     sun: '<path d="M12 4V2M12 22v-2M4 12H2M22 12h-2M5.6 5.6 4.2 4.2M19.8 19.8l-1.4-1.4M5.6 18.4l-1.4 1.4M19.8 4.2l-1.4 1.4"/><circle cx="12" cy="12" r="4"/>',
     moon: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
@@ -452,11 +547,14 @@
     cal: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
     print: '<path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/>',
     reset: '<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v6h6"/>',
+    save: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/>',
     users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/>',
     tag: '<path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
     list: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
     copy: '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
     link: '<path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
     close: '<path d="M6 6l12 12M18 6L6 18"/>'
   };
   function ico(name) { return `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; }
@@ -470,7 +568,9 @@
       <span class="row-icon">${ico(icon)}</span>
       <span class="row-text"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${right}</${tag}>`;
   }
-  let resetArmed = false;
+
+  // ---------- «Mer»-panelet ----------
+  let armed = null;   // to-trinns bekreftelse: 'reset-done' | 'reset-tasks'
 
   function renderMore() {
     const p = themePref();
@@ -504,18 +604,21 @@
       <section class="sheet-section">
         <h3>Varsler</h3>
         <div class="group">
-          ${row('mail', 'Ukentlig e-post', 'Dine frister de neste 30 dagene', { soon: 'Steg 4' })}
-          ${row('bell', 'Påminnelse før frist', 'For eksempel 7 dager før', { soon: 'Steg 4' })}
+          ${row('mail', 'Ukentlig e-post', 'Dine frister de neste 30 dagene – du velger selv om du vil ha den', { soon: 'Steg 4' })}
+          ${row('bell', 'Påminnelse og purring', 'Før fristen, og når en frist har passert uten avkrysning', { soon: 'Steg 4' })}
           ${row('link', 'Abonner i kalenderen', 'Fristene oppdateres automatisk i Outlook, Google og iPhone', { soon: 'Steg 4' })}
         </div>
       </section>
 
       <section class="sheet-section">
-        <h3>Data</h3>
+        <h3>Oppgaver og data</h3>
         <div class="group">
+          ${row('plus', 'Ny oppgave', 'Legg til en oppgave i årshjulet', { action: 'new' })}
           ${row('cal', 'Last ned kalenderfil', 'Fristene som passer filteret nå, som .ics-fil', { action: 'ics' })}
           ${row('print', 'Skriv ut / lagre som PDF', 'Hele sesongen som liste', { action: 'print' })}
-          ${row('reset', resetArmed ? 'Trykk igjen for å nullstille' : 'Nullstill avkrysninger', nDone ? `${nDone} avkrysset på denne enheten` : 'Ingen avkrysninger ennå', { action: 'reset', danger: true })}
+          ${row('save', 'Last ned sikkerhetskopi', 'Alle oppgaver og avkrysninger som fil', { action: 'backup' })}
+          ${row('reset', armed === 'reset-done' ? 'Trykk igjen for å nullstille' : 'Nullstill avkrysninger', nDone ? `${nDone} avkrysset på denne enheten` : 'Ingen avkrysninger ennå', { action: 'reset-done', danger: true })}
+          ${customized ? row('trash', armed === 'reset-tasks' ? 'Trykk igjen – endringene dine slettes' : 'Tilbakestill til eksempeloppgavene', 'Fjerner oppgavene du har lagt til eller endret', { action: 'reset-tasks', danger: true }) : ''}
         </div>
       </section>
 
@@ -524,8 +627,7 @@
         <div class="group">
           ${row('users', 'Brukere og tilgang', 'Legg til brukere, gi admin- eller lesetilgang', { soon: 'Steg 2' })}
           ${row('tag', 'Verv', 'Opprett, endre og fordel verv', { soon: 'Steg 2' })}
-          ${row('list', 'Oppgaver', 'Opprett og endre oppgaver, frister og lenker', { soon: 'Steg 3' })}
-          ${row('copy', 'Ny sesong', 'Kopier årshjulet – avkrysninger nullstilles', { soon: 'Steg 5' })}
+          ${row('copy', 'Ny sesong', 'Velg hvilke faste oppgaver som skal være med – avkrysninger nullstilles', { soon: 'Steg 5' })}
         </div>
       </section>
 
@@ -546,7 +648,13 @@
             <li>Trykk på en oppgave for å se beskrivelse, underoppgaver, lenker og kilde.</li>
             <li>Trykk på sirkelen til høyre for å krysse av.</li>
             <li>Datoboksen: <b>30 NOV</b> = fast frist, <b>? NOV</b> = dato kommer, <b>– NOV</b> = i løpet av måneden.</li>
+            <li><b>↻</b> betyr at oppgaven gjentas, for eksempel hver måned. Hver gang krysses av for seg.</li>
             <li>«Forberedes av» viser oppgaver som må gjøres først, for eksempel at trenerne melder antall lag før lagene meldes på.</li></ul>`)}
+          ${guide('Legge til og endre oppgaver', `<ul>
+            <li>Trykk på <b>+</b> nede til høyre, eller «Legg til i …» under en måned.</li>
+            <li>Åpne en oppgave og trykk <b>Rediger</b> eller <b>Kopier</b>.</li>
+            <li>Fristen kan være en fast dato, bare en måned, «dato kommer», en periode (åpner–frist) eller et antall dager/uker før en annen oppgave.</li>
+            <li>Foreløpig lagres oppgavene bare på denne enheten. Last ned en sikkerhetskopi hvis du legger inn mye.</li></ul>`)}
           ${guide('Neste frister', `<p>Øverst ser du de neste fristene og frister som har passert uten å bli krysset av. Trykk på et kort for å gå til oppgaven.</p>`)}
         </div>
       </section>
@@ -554,24 +662,273 @@
       <section class="sheet-section">
         <h3>Om</h3>
         <div class="group about">
-          <div><b>Tune IL årshjul</b> · testversjon 0.4</div>
+          <div><b>Tune IL årshjul</b> · testversjon ${VERSION}</div>
           <div>Oppgavene er eksempler. Frister fra NHF Region Øst og NIF må sjekkes hver sesong.</div>
-          <div>Avkrysninger lagres foreløpig bare på denne enheten.</div>
+          <div>Oppgaver og avkrysninger lagres foreløpig bare på denne enheten.</div>
         </div>
       </section>`;
   }
-  function openMore() {
-    resetArmed = false;
-    renderMore();
-    const dlg = document.getElementById('more');
-    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
+  function openDialog(id) {
+    const dlg = document.getElementById(id);
+    if (dlg.showModal) { if (!dlg.open) dlg.showModal(); } else dlg.setAttribute('open', '');
   }
-  function closeMore() {
-    const dlg = document.getElementById('more');
+  function closeDialog(id) {
+    const dlg = document.getElementById(id);
     if (dlg.close) dlg.close(); else dlg.removeAttribute('open');
   }
-  // Klikk utenfor panelet lukker det
-  document.getElementById('more').addEventListener('click', e => { if (e.target.id === 'more') closeMore(); });
+  function openMore() { armed = null; renderMore(); openDialog('more'); }
+  ['more', 'task-form'].forEach(id => {
+    document.getElementById(id).addEventListener('click', e => { if (e.target.id === id) closeDialog(id); });
+  });
+
+  // ---------- Oppgaveskjema ----------
+  let draft = null;
+  let formError = '';
+  let deleteArmed = false;
+
+  function newId() { return 'o' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
+
+  function draftFromTask(t) {
+    const kind = t.rel ? 'rel' : t.opens ? 'period' : t.due ? 'date' : t.dateTbd ? 'tbd' : 'month';
+    const due = resolveDue(t);
+    return {
+      id: t.id, title: t.title, description: t.description || '', type: t.type,
+      units: t.units.slice(), role: t.role, kind,
+      due: t.due || '', opens: t.opens || '',
+      month: due ? due.getMonth() + 1 : (t.month || seasonMonths[state.month].m),
+      relTask: t.rel ? t.rel.task : '', relAmount: t.rel ? t.rel.amount : 2, relUnit: t.rel ? t.rel.unit : 'weeks',
+      repeat: t.repeat || 'yearly',
+      sub: (t.sub || []).map(s => { const b = subBefore(s); return { title: s.title, amount: b ? b.amount : '', unit: b ? b.unit : 'days' }; }),
+      links: (t.links || []).map(l => ({ label: l.label || '', url: l.url || '' })),
+      prepares: t.prepares || '', source: t.source || ''
+    };
+  }
+  function blankDraft(monthIdx) {
+    const units = state.units.includes('handball') ? ['handball'] : [state.units[0]];
+    return {
+      id: null, title: '', description: '', type: 'frist', units,
+      role: state.role !== 'alle' ? state.role : '', kind: 'month',
+      due: '', opens: '', month: seasonMonths[monthIdx].m,
+      relTask: '', relAmount: 2, relUnit: 'weeks', repeat: 'yearly',
+      sub: [], links: [], prepares: '', source: ''
+    };
+  }
+
+  function openForm(d) {
+    draft = d; formError = ''; deleteArmed = false;
+    renderForm();
+    openDialog('task-form');
+    setTimeout(() => { const el = document.querySelector('#task-form [data-field="title"]'); if (el && !draft.id) el.focus(); }, 50);
+  }
+
+  function relCandidates() {
+    return tasks
+      .filter(t => t.id !== draft.id)
+      .map(t => ({ t, d: resolveDue(t) }))
+      .filter(x => x.d && !(x.t.rel && x.t.rel.task === draft.id))
+      .sort((a, b) => a.d - b.d);
+  }
+
+  function renderForm() {
+    const d = draft;
+    const isEdit = !!d.id;
+    const min = isoDate(seasonStart), max = isoDate(seasonEnd);
+    const kinds = [['date', 'Dato'], ['month', 'Måned'], ['tbd', 'Dato kommer'], ['period', 'Periode'], ['rel', 'Før oppgave']];
+    const monthOpts = seasonMonths.map(sm => `<option value="${sm.m}"${sm.m === Number(d.month) ? ' selected' : ''}>${MONTHS[sm.m - 1]} ${sm.y}</option>`).join('');
+    const unitSel = (name, val) => `<select data-field="${name}">${Object.keys(UNIT_WORD).map(u => `<option value="${u}"${u === val ? ' selected' : ''}>${UNIT_WORD[u][1]}</option>`).join('')}</select>`;
+    const relOpts = '<option value="">Velg oppgave …</option>' + relCandidates().map(x => `<option value="${esc(x.t.id)}"${x.t.id === d.relTask ? ' selected' : ''}>${fmtShort(x.d)} – ${esc(x.t.title)}</option>`).join('');
+    const prepOpts = '<option value="">Ingen</option>' + tasks.filter(t => t.id !== d.id).slice().sort((a, b) => a.title.localeCompare(b.title, 'no'))
+      .map(t => `<option value="${esc(t.id)}"${t.id === d.prepares ? ' selected' : ''}>${esc(t.title)}</option>`).join('');
+    const repeatLocked = d.kind === 'rel' || d.kind === 'period';
+
+    let when = '';
+    if (d.kind === 'date') when = `<label class="field"><span>Frist</span><input type="date" data-field="due" value="${esc(d.due)}" min="${min}" max="${max}"></label>`;
+    if (d.kind === 'month' || d.kind === 'tbd') when = `<label class="field"><span>Måned</span><select data-field="month">${monthOpts}</select></label>
+      <p class="hint">${d.kind === 'tbd' ? 'Vises med «?» til datoen er kjent. Rediger oppgaven og velg «Dato» når den kommer.' : 'Oppgaven gjøres en gang i løpet av måneden.'}</p>`;
+    if (d.kind === 'period') when = `<div class="field-row">
+        <label class="field"><span>Åpner</span><input type="date" data-field="opens" value="${esc(d.opens)}" min="${min}" max="${max}"></label>
+        <label class="field"><span>Frist</span><input type="date" data-field="due" value="${esc(d.due)}" min="${min}" max="${max}"></label></div>
+      <p class="hint">For eksempel dommerpåmelding: åpner 1. april, frist 1. mai.</p>`;
+    if (d.kind === 'rel') when = `<div class="field-row rel-row">
+        <label class="field narrow"><span>Antall</span><input type="number" min="0" max="365" inputmode="numeric" data-field="relAmount" value="${esc(d.relAmount)}"></label>
+        <label class="field narrow"><span>&nbsp;</span>${unitSel('relUnit', d.relUnit)}</label>
+        <span class="rel-word">før</span></div>
+      <label class="field"><span>Oppgave</span><select data-field="relTask">${relOpts}</select></label>
+      <p class="hint">Fristen flytter seg automatisk hvis den andre oppgaven får ny dato. Oppgaven vises også som «Forberedes av» på den andre.</p>`;
+
+    document.getElementById('task-form-content').innerHTML = `
+      <div class="sheet-head">
+        <h2>${isEdit ? 'Rediger oppgave' : 'Ny oppgave'}</h2>
+        <button type="button" class="icon-btn" data-action="close-form" aria-label="Lukk">${ico('close')}</button>
+      </div>
+      <form class="task-form" novalidate>
+        <label class="field"><span>Tittel</span><input type="text" data-field="title" value="${esc(d.title)}" placeholder="F.eks. Påmelding av lag til seriespill" maxlength="120" autocomplete="off"></label>
+
+        <div class="field"><span>Type</span>
+          <div class="opt-chips">${Object.entries(D.types).map(([k, tp]) => `<button type="button" class="opt-chip${d.type === k ? ' on' : ''}" data-action="f-type" data-val="${k}" style="--type:${tp.color}" aria-pressed="${d.type === k}"><i></i>${tp.name}</button>`).join('')}</div>
+        </div>
+
+        <div class="field"><span>Gjelder</span>
+          <div class="opt-chips">${D.units.map(u => `<button type="button" class="opt-chip unit${d.units.includes(u.id) ? ' on' : ''}" data-action="f-unit" data-val="${u.id}" aria-pressed="${d.units.includes(u.id)}">${d.units.includes(u.id) ? '✓ ' : ''}${esc(u.name)}</button>`).join('')}</div>
+        </div>
+
+        <label class="field"><span>Ansvarlig verv</span>
+          <select data-field="role"><option value="">Velg verv …</option>${roleOptions()}</select></label>
+
+        <fieldset class="form-block">
+          <legend>Når</legend>
+          <div class="seg-tabs" role="group" aria-label="Type frist">${kinds.map(([k, l]) => `<button type="button" class="${d.kind === k ? 'on' : ''}" data-action="f-kind" data-val="${k}" aria-pressed="${d.kind === k}">${l}</button>`).join('')}</div>
+          ${when}
+          <label class="field"><span>Gjentas</span>
+            <select data-field="repeat"${repeatLocked ? ' disabled' : ''}>${Object.entries(REPEAT).map(([k, r]) => `<option value="${k}"${k === (repeatLocked ? 'yearly' : d.repeat) ? ' selected' : ''}>${r.label}</option>`).join('')}</select></label>
+          <p class="hint">${repeatLocked ? 'Perioder og frister før en annen oppgave gjentas hvert år.' : '«Hvert år» og «hver måned» o.l. tas med til neste sesong. «Bare denne sesongen» gjør ikke det.'}</p>
+        </fieldset>
+
+        <label class="field"><span>Beskrivelse</span><textarea data-field="description" rows="3" placeholder="Hva skal gjøres, og hvordan?">${esc(d.description)}</textarea></label>
+
+        <fieldset class="form-block">
+          <legend>Underoppgaver</legend>
+          ${d.sub.map((s, i) => `<div class="sub-row">
+            <input type="text" data-sub="${i}" data-key="title" value="${esc(s.title)}" placeholder="Underoppgave">
+            <div class="sub-when-row">
+              <input type="number" min="0" max="365" inputmode="numeric" data-sub="${i}" data-key="amount" value="${esc(s.amount)}" placeholder="–" aria-label="Antall før">
+              <select data-sub="${i}" data-key="unit">${Object.keys(UNIT_WORD).map(u => `<option value="${u}"${u === s.unit ? ' selected' : ''}>${UNIT_WORD[u][1]} før</option>`).join('')}</select>
+              <button type="button" class="icon-btn small" data-action="f-sub-del" data-val="${i}" aria-label="Fjern underoppgave">${ico('close')}</button>
+            </div></div>`).join('')}
+          <button type="button" class="btn-add" data-action="f-sub-add">+ Underoppgave</button>
+          ${d.sub.length ? '<p class="hint">Antall før er valgfritt – f.eks. «4 uker før» hovedoppgavens frist.</p>' : ''}
+        </fieldset>
+
+        <fieldset class="form-block">
+          <legend>Lenker</legend>
+          ${d.links.map((l, i) => `<div class="link-row">
+            <input type="text" data-link="${i}" data-key="label" value="${esc(l.label)}" placeholder="Navn, f.eks. TurneringsAdmin">
+            <input type="url" data-link="${i}" data-key="url" value="${esc(l.url)}" placeholder="https://…" inputmode="url">
+            <button type="button" class="icon-btn small" data-action="f-link-del" data-val="${i}" aria-label="Fjern lenke">${ico('close')}</button></div>`).join('')}
+          <button type="button" class="btn-add" data-action="f-link-add">+ Lenke</button>
+          <p class="hint">Lenke til skjema, regelverk eller dokument i Bård.</p>
+        </fieldset>
+
+        ${d.kind !== 'rel' ? `<label class="field"><span>Forbereder oppgave (valgfritt)</span><select data-field="prepares">${prepOpts}</select></label>` : ''}
+
+        ${formError ? `<p class="form-error" role="alert">${esc(formError)}</p>` : ''}
+
+        <div class="form-actions">
+          ${isEdit ? `<button type="button" class="btn-danger" data-action="f-delete">${deleteArmed ? 'Trykk igjen for å slette' : 'Slett'}</button>` : '<span></span>'}
+          <div class="form-actions-right">
+            <button type="button" class="btn-secondary" data-action="close-form">Avbryt</button>
+            <button type="submit" class="btn-primary">${isEdit ? 'Lagre' : 'Legg til'}</button>
+          </div>
+        </div>
+      </form>`;
+    const roleSel = document.querySelector('#task-form [data-field="role"]');
+    if (roleSel) roleSel.value = d.role || '';
+  }
+
+  // Les verdier fra feltene inn i utkastet (uten å tegne skjemaet på nytt)
+  document.getElementById('task-form').addEventListener('input', e => {
+    if (!draft) return;
+    const el = e.target;
+    if (el.dataset.field) draft[el.dataset.field] = el.value;
+    if (el.dataset.sub !== undefined) draft.sub[Number(el.dataset.sub)][el.dataset.key] = el.value;
+    if (el.dataset.link !== undefined) draft.links[Number(el.dataset.link)][el.dataset.key] = el.value;
+  });
+  document.getElementById('task-form').addEventListener('submit', e => { e.preventDefault(); saveDraft(); });
+
+  function fail(msg) { formError = msg; renderForm(); const el = document.querySelector('.form-error'); if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+
+  function saveDraft() {
+    const d = draft;
+    const title = d.title.trim();
+    if (!title) return fail('Oppgaven må ha en tittel.');
+    if (!d.units.length) return fail('Velg minst én enhet oppgaven gjelder.');
+    if (!d.role) return fail('Velg hvilket verv som har ansvaret.');
+    const inSeason = s => { if (!s) return false; const x = parseDate(s); return x >= seasonStart && x <= seasonEnd; };
+    const range = `${fmtDay(seasonStart)} ${seasonStart.getFullYear()} – ${fmtDay(seasonEnd)} ${seasonEnd.getFullYear()}`;
+
+    const t = { id: d.id || newId(), title, type: d.type, units: D.units.map(u => u.id).filter(u => d.units.includes(u)), role: d.role };
+    if (d.description.trim()) t.description = d.description.trim();
+    if (d.kind === 'date') {
+      if (!inSeason(d.due)) return fail(`Velg en dato i sesongen (${range}).`);
+      t.due = d.due;
+    } else if (d.kind === 'month' || d.kind === 'tbd') {
+      t.month = Number(d.month);
+      if (d.kind === 'tbd') t.dateTbd = true;
+    } else if (d.kind === 'period') {
+      if (!inSeason(d.opens) || !inSeason(d.due)) return fail(`Velg både åpner- og fristdato i sesongen (${range}).`);
+      if (d.opens > d.due) return fail('Åpner-datoen må være før fristen.');
+      t.opens = d.opens; t.due = d.due;
+    } else if (d.kind === 'rel') {
+      const amount = Number(d.relAmount);
+      if (!d.relTask || !taskById[d.relTask]) return fail('Velg hvilken oppgave fristen skal regnes fra.');
+      if (!(amount >= 0)) return fail('Skriv inn hvor lang tid før.');
+      t.rel = { task: d.relTask, amount, unit: d.relUnit };
+      t.prepares = d.relTask;
+      const base = resolveDue(taskById[d.relTask]);
+      const due = base ? shiftBack(base, amount, d.relUnit) : null;
+      if (!due || due < seasonStart) return fail('Fristen havner før sesongstart. Velg kortere tid.');
+      t.month = due.getMonth() + 1;
+    }
+    if (d.kind !== 'rel' && d.kind !== 'period' && d.repeat !== 'yearly') t.repeat = d.repeat;
+    if (d.kind !== 'rel' && d.prepares) t.prepares = d.prepares;
+    const subs = d.sub.filter(s => s.title.trim()).map(s => {
+      const o = { title: s.title.trim() };
+      if (s.amount !== '' && Number(s.amount) > 0) o.before = { amount: Number(s.amount), unit: s.unit };
+      return o;
+    });
+    if (subs.length) t.sub = subs;
+    const links = d.links.filter(l => l.url.trim()).map(l => {
+      let url = l.url.trim();
+      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+      return { label: l.label.trim() || url.replace(/^https?:\/\//i, '').split('/')[0], url };
+    });
+    if (links.length) t.links = links;
+    if (d.source) t.source = d.source;
+
+    const i = tasks.findIndex(x => x.id === t.id);
+    if (i >= 0) {
+      // Avkrysninger for gjentakende oppgaver hører til månedene – fjern dem hvis gjentakelsen endres
+      const old = tasks[i];
+      if ((old.repeat || 'yearly') !== (t.repeat || 'yearly')) clearDone(t.id);
+      tasks[i] = t;
+    } else tasks.push(t);
+    saveTasks();
+
+    closeDialog('task-form');
+    // Vis oppgaven der den havnet
+    const first = occ.filter(o => o.t.id === t.id).sort((a, b) => (a.idx >= state.month ? a.idx : a.idx + 12) - (b.idx >= state.month ? b.idx : b.idx + 12))[0];
+    if (!t.units.some(u => state.units.includes(u))) state.units = D.units.map(u => u.id).filter(u => t.units.includes(u) || state.units.includes(u));
+    if (state.role !== 'alle' && state.role !== t.role) state.role = 'alle';
+    if (first) { state.month = first.idx; state.open = first.key; }
+    saveState(); render();
+    const card = first && document.getElementById('task-' + first.key);
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    toast(i >= 0 ? 'Oppgaven er lagret' : 'Oppgaven er lagt til');
+  }
+
+  function clearDone(taskId) {
+    Object.keys(done).forEach(k => { if (k === taskId || k.startsWith(taskId + '@')) delete done[k]; });
+    writeJSON(DONE_KEY, done);
+  }
+
+  function deleteTask(id) {
+    // Oppgaver som var regnet fra denne får fast dato i stedet
+    tasks.forEach(t => {
+      if (t.rel && t.rel.task === id) {
+        const due = resolveDue(t);
+        delete t.rel;
+        if (due) { t.due = isoDate(due); delete t.month; }
+      }
+      if (t.prepares === id) delete t.prepares;
+    });
+    tasks = tasks.filter(t => t.id !== id);
+    clearDone(id);
+    saveTasks();
+    state.open = null;
+    closeDialog('task-form');
+    render();
+    toast('Oppgaven er slettet');
+  }
 
   // ---------- Hendelser ----------
   function setMonth(i) {
@@ -579,14 +936,49 @@
     state.open = null;
     render();
   }
+  function findOcc(ref) {
+    const exact = occ.find(o => o.key === ref);
+    if (exact) return exact;
+    const list = occ.filter(o => o.t.id === ref);
+    return list.find(o => o.idx === state.month) || list.sort((a, b) => a.idx - b.idx)[0];
+  }
 
   document.addEventListener('click', e => {
-    const seg = e.target.closest('.seg');
-    if (seg) return setMonth(Number(seg.dataset.month));
+    if (e.target.closest('#wheel .seg')) return setMonth(Number(e.target.closest('.seg').dataset.month));
 
     const el = e.target.closest('[data-action]');
     if (!el) return;
     const a = el.dataset.action;
+    const val = el.dataset.val;
+
+    // Skjemaet
+    if (a.startsWith('f-') && draft) {
+      if (a === 'f-type') draft.type = val;
+      else if (a === 'f-unit') draft.units = draft.units.includes(val) ? draft.units.filter(u => u !== val) : draft.units.concat(val);
+      else if (a === 'f-kind') {
+        draft.kind = val;
+        if ((val === 'date' || val === 'period') && !draft.due) {
+          const sm = seasonMonths.find(s => s.m === Number(draft.month)) || seasonMonths[state.month];
+          draft.due = isoDate(new Date(sm.y, sm.m - 1, 1));
+        }
+      }
+      else if (a === 'f-sub-add') draft.sub.push({ title: '', amount: '', unit: 'weeks' });
+      else if (a === 'f-sub-del') draft.sub.splice(Number(val), 1);
+      else if (a === 'f-link-add') draft.links.push({ label: '', url: '' });
+      else if (a === 'f-link-del') draft.links.splice(Number(val), 1);
+      else if (a === 'f-delete') {
+        if (!deleteArmed) { deleteArmed = true; renderForm(); return; }
+        return deleteTask(draft.id);
+      }
+      formError = '';
+      renderForm();
+      if (a === 'f-sub-add' || a === 'f-link-add') {
+        const inputs = document.querySelectorAll(a === 'f-sub-add' ? '[data-sub][data-key="title"]' : '[data-link][data-key="label"]');
+        if (inputs.length) inputs[inputs.length - 1].focus();
+      }
+      return;
+    }
+
     if (a === 'unit') {
       const id = el.dataset.unit;
       if (state.units.includes(id)) {
@@ -603,31 +995,53 @@
     else if (a === 'open') {
       state.open = state.open === el.dataset.task ? null : el.dataset.task; render();
     } else if (a === 'done') {
-      const id = el.dataset.task;
-      if (done[id]) delete done[id]; else done[id] = new Date().toISOString();
+      const key = el.dataset.task;
+      if (done[key]) delete done[key]; else done[key] = new Date().toISOString();
       writeJSON(DONE_KEY, done); render();
     } else if (a === 'goto') {
-      const t = taskById[el.dataset.task];
+      const o = findOcc(el.dataset.task);
+      if (!o) return;
+      const t = o.t;
       if (!t.units.some(u => state.units.includes(u))) state.units = D.units.map(u => u.id).filter(u => t.units.includes(u) || state.units.includes(u));
       if (state.role !== 'alle' && state.role !== t.role) state.role = 'alle';
       state.hideDone = false;
-      if (state.view === 'hjul') state.month = taskIndex(t);
-      state.open = t.id;
+      if (state.view === 'hjul') state.month = o.idx;
+      state.open = o.key;
       saveState(); render();
-      const card = document.getElementById('task-' + t.id);
+      const card = document.getElementById('task-' + o.key);
       if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    } else if (a === 'more') openMore();
-    else if (a === 'close-more') closeMore();
+    } else if (a === 'new') {
+      closeDialog('more');
+      openForm(blankDraft(el.dataset.month !== undefined ? Number(el.dataset.month) : state.month));
+    } else if (a === 'edit') {
+      const t = taskById[el.dataset.task];
+      if (t) openForm(draftFromTask(t));
+    } else if (a === 'copy') {
+      const t = taskById[el.dataset.task];
+      if (!t) return;
+      const d = draftFromTask(t);
+      d.id = null; d.title = t.title + ' (kopi)';
+      openForm(d);
+    } else if (a === 'close-form') closeDialog('task-form');
+    else if (a === 'more') openMore();
+    else if (a === 'close-more') closeDialog('more');
     else if (a === 'theme') {
       try { localStorage.setItem(THEME_KEY, el.dataset.themeVal); } catch (err) { /* ignorer */ }
       applyTheme(); renderMore();
     } else if (a === 'ics') downloadIcs();
-    else if (a === 'reset') {
-      if (!resetArmed) { resetArmed = true; renderMore(); return; }
-      done = {}; writeJSON(DONE_KEY, done); resetArmed = false;
-      render(); renderMore(); toast('Avkrysningene er nullstilt');
+    else if (a === 'backup') downloadBackup();
+    else if (a === 'reset-done' || a === 'reset-tasks') {
+      if (armed !== a) { armed = a; renderMore(); return; }
+      armed = null;
+      if (a === 'reset-done') { done = {}; writeJSON(DONE_KEY, done); toast('Avkrysningene er nullstilt'); }
+      else {
+        try { localStorage.removeItem(TASKS_KEY); } catch (err) { /* ignorer */ }
+        tasks = clone(D.tasks); customized = false; rebuild();
+        toast('Eksempeloppgavene er tilbake');
+      }
+      state.open = null; render(); renderMore();
     } else if (a === 'print') {
-      closeMore();
+      closeDialog('more');
       const prev = state.view;
       state.view = 'liste'; state.open = null; render();
       setTimeout(() => { window.print(); state.view = prev; render(); }, 50);
@@ -635,6 +1049,7 @@
   });
 
   document.addEventListener('keydown', e => {
+    if (document.querySelector('dialog[open]')) return;
     const seg = e.target.closest && e.target.closest('.seg');
     if (seg && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setMonth(Number(seg.dataset.month)); }
     if (state.view === 'hjul' && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) {
@@ -644,7 +1059,6 @@
   });
 
   // ---------- Rulle på hjulet ----------
-  // Dra rundt hjulet (finger eller mus), eller bruk musehjulet.
   const wheelEl = document.getElementById('wheel');
   function svgPoint(clientX, clientY) {
     const m = wheelEl.getScreenCTM();
@@ -665,8 +1079,6 @@
     const i = monthAt(p);
     if (i !== state.month) { state.month = i; state.open = null; render(); }
   }
-
-  // Mus (PC)
   wheelEl.addEventListener('pointerdown', e => {
     if (e.pointerType === 'touch') return;
     if (!onRing(svgPoint(e.clientX, e.clientY))) return;
@@ -676,8 +1088,6 @@
   });
   window.addEventListener('pointermove', e => { if (dragging && e.pointerType !== 'touch') dragTo(e.clientX, e.clientY); });
   window.addEventListener('pointerup', () => { dragging = false; wheelEl.classList.remove('dragging'); });
-
-  // Finger (mobil): bare når fingeren starter på ringen, ellers scroller siden som vanlig
   wheelEl.addEventListener('touchstart', e => {
     const t = e.touches[0];
     if (e.touches.length !== 1 || !onRing(svgPoint(t.clientX, t.clientY))) return;
@@ -691,8 +1101,6 @@
     dragTo(t.clientX, t.clientY);
   }, { passive: false });
   wheelEl.addEventListener('touchend', () => { dragging = false; wheelEl.classList.remove('dragging'); });
-
-  // Musehjul / styreflate
   let wheelAcc = 0, wheelTimer = null;
   wheelEl.addEventListener('wheel', e => {
     e.preventDefault();
@@ -712,5 +1120,6 @@
     state.hideDone = e.target.checked; saveState(); render();
   });
 
+  rebuild();
   render();
 })();

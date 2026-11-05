@@ -73,6 +73,9 @@ window.ARSHJUL_DATA = {
      month:   bare måned (1–12), evt. med dateTbd: true = «dato kommer»
      sub:     underoppgaver, evt. med frist relativt til hovedoppgaven
      prepares: id til oppgaven denne forbereder (f.eks. trener → styret)
+     repeat:  'yearly' (standard), 'once', 'quarterly', 'bimonthly', 'monthly'
+     opens:   startdato for en periode (f.eks. påmelding åpner)
+     rel:     frist relativt til en annen oppgave, f.eks. { task: 'arsmote-klubb', amount: 2, unit: 'weeks' }
      source:  hvor oppgaven/fristen kommer fra (se sources)
      NB: Frister for 2027 er antatt like som i 2026 – sjekk når regionen publiserer nye. */
   tasks: [
@@ -105,7 +108,7 @@ window.ARSHJUL_DATA = {
       description: 'Invitasjon kommer fra regionen eller en vertsklubb.' },
     { id: 'infomote-4er', title: 'Infomøte 4-er-håndball (6–8 år) for trenere og lagledere', type: 'mote', units: ['handball'], role: 'trener-hb', month: 10, source: 'ro',
       description: 'Obligatorisk. Møter 8., 12. og 13. oktober og 10. og 11. november.' },
-    { id: 'styremote-okt', title: 'Styremøte', type: 'mote', units: ['handball'], role: 'leder-hb', month: 10 },
+    { id: 'styremote-hb', title: 'Styremøte', type: 'mote', units: ['handball'], role: 'leder-hb', month: 8, repeat: 'bimonthly' },
     { id: 'loddbok', title: 'Salg av loddbok', type: 'dugnad', units: ['klubb', 'handball', 'fotball'], role: 'kiosk-dugnad-hb', due: '2026-10-15',
       description: 'Klubbdugnad. Loddbøkene deles ut til lagene, som selger innen fristen.' },
 
@@ -149,7 +152,7 @@ window.ARSHJUL_DATA = {
       sub: [{ title: 'Oversikt over trenerkompetanse' }, { title: 'Oversikt over dommerkompetanse' }, { title: 'Meld kursbehov til regionen' }] },
 
     // ---------- April ----------
-    { id: 'dommer-pamelding', title: 'Påmelding av dommere for neste sesong', type: 'frist', units: ['handball'], role: 'sportslig-hb', due: '2027-05-01', source: 'ro',
+    { id: 'dommer-pamelding', title: 'Påmelding av dommere for neste sesong', type: 'frist', units: ['handball'], role: 'sportslig-hb', opens: '2027-04-01', due: '2027-05-01', source: 'ro',
       description: 'Åpner 1. april, frist 1. mai. Klubbens dommerkontakt melder på i TurneringsAdmin. Dommerne må ha fullført nødvendige kurs for å telle på kvoten.' },
     { id: 'beach', title: 'Påmelding til Beachdagen og Beachserien', type: 'frist', units: ['handball'], role: 'sportslig-hb', due: '2027-04-11', source: 'ro',
       description: 'I TurneringsAdmin. Spilles i mai/juni.' },
