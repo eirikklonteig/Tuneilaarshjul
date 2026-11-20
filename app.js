@@ -6,7 +6,7 @@
   'use strict';
 
   const D = window.ARSHJUL_DATA;
-  const VERSION = '0.8';
+  const VERSION = '0.9';
   const MONTHS = ['januar', 'februar', 'mars', 'april', 'mai', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'desember'];
   const MONTHS_SHORT = ['JAN', 'FEB', 'MAR', 'APR', 'MAI', 'JUN', 'JUL', 'AUG', 'SEP', 'OKT', 'NOV', 'DES'];
   const WEEKDAYS = ['søndag', 'mandag', 'tirsdag', 'onsdag', 'torsdag', 'fredag', 'lørdag'];
@@ -999,6 +999,7 @@
       ${sheetHead('Brukere og tilgang', 'main')}
       <div class="users-tools">
         <input type="search" id="user-search" placeholder="Søk etter navn eller e-post" value="${esc(userSearch)}">
+        <button type="button" class="btn-secondary" data-action="bulk-open">Legg til flere</button>
         <button type="button" class="btn-primary" data-action="user-new">+ Ny bruker</button>
       </div>
       <div class="group">
@@ -1279,6 +1280,126 @@
     } catch (err) { d.msg = err.message; d.armed = false; renderUserEdit(); }
   }
 
+  // ---------- Legg til flere brukere fra en liste ----------
+  // Én person per linje: «Navn, e-post, verv». Skilletegn: komma, semikolon eller tab (lim inn fra Excel).
+  let bulk = null;
+  function readBulkText() { const el = document.getElementById('bulk-text'); if (el && bulk) bulk.text = el.value; }
+  function norm(s) { return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim(); }
+  function parseBulk(text, unit) {
+    // Verv søkes først i valgt enhet (så «Leder» blir riktig), deretter i de andre enhetene du er admin for
+    const adminUnits = D.units.map(u => u.id).filter(u => myAccess(u) === 'admin');
+    const roles = cloud.roles.filter(r => r.active && r.unit_id === unit).concat(cloud.roles.filter(r => r.active && r.unit_id !== unit && adminUnits.includes(r.unit_id)));
+    const seen = new Set();
+    return text.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(line => {
+      const parts = line.split(/\t|;|,/).map(s => s.trim()).filter(Boolean);
+      const emailIdx = parts.findIndex(p => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(p));
+      const email = emailIdx >= 0 ? parts[emailIdx].toLowerCase() : '';
+      const rest = parts.filter((_, i) => i !== emailIdx);
+      const name = rest[0] || '';
+      const vervText = rest.slice(1).join(' / ');
+      const wanted = vervText ? vervText.split(/\s*[\/+&]\s*/).map(norm).filter(Boolean) : [];
+      const matched = [], missing = [];
+      wanted.forEach(w => {
+        const r = roles.find(x => norm(x.name) === w) || roles.find(x => norm(x.name).startsWith(w) || w.startsWith(norm(x.name)));
+        if (r) matched.push(r); else missing.push(w);
+      });
+      const existing = email ? cloud.members.find(m => m.email === email) : null;
+      let error = '';
+      if (!name && !existing) error = 'Mangler navn';
+      else if (!email) error = 'Mangler gyldig e-post';
+      else if (seen.has(email)) error = 'Står to ganger i listen';
+      if (email) seen.add(email);
+      const units = [unit].concat(matched.map(r => r.unit_id)).filter((u, i, a) => a.indexOf(u) === i);
+      return { line, name: name || (existing && existing.name) || '', email, roles: matched, missing, existing, error, units };
+    });
+  }
+  function renderBulk() {
+    const b = bulk;
+    const adminUnits = D.units.filter(u => myAccess(u.id) === 'admin');
+    const rows = b.rows;
+    const ok = rows ? rows.filter(r => !r.error) : [];
+    const roleNames = cloud.roles.filter(r => r.unit_id === b.unit && r.active).map(r => r.name).join(', ');
+    let body;
+    if (b.done) {
+      body = `<div class="banner"><b>${b.done.added} lagt til${b.done.updated ? `, ${b.done.updated} oppdatert` : ''}</b>
+        <p>De får ingen e-post automatisk. Send dem lenken og en kort forklaring, for eksempel i Spond eller på e-post:</p>
+        <pre class="bulk-invite">${esc(groupInvite())}</pre>
+        <div class="banner-actions"><button type="button" class="btn-primary" data-action="bulk-copy">Kopier teksten</button>
+        <button type="button" class="btn-secondary" data-action="more-view" data-val="users">Ferdig</button></div>
+        ${b.done.errors.length ? `<p class="form-error">Ikke lagt til: ${b.done.errors.map(esc).join('; ')}</p>` : ''}</div>`;
+    } else {
+      body = `
+        <div class="field"><span>1. Hvilken enhet skal de ha tilgang til?</span>
+          <div class="seg-tabs">${adminUnits.map(u => `<button type="button" class="${b.unit === u.id ? 'on' : ''}" data-action="bulk-unit" data-val="${u.id}">${esc(u.name)}</button>`).join('')}</div></div>
+        <div class="field"><span>2. Hvilken tilgang?</span>
+          <div class="seg-tabs">${[['reader', 'Leser'], ['editor', 'Redaktør'], ['admin', 'Admin']].map(([v, l]) => `<button type="button" class="${b.level === v ? 'on' : ''}" data-action="bulk-level" data-val="${v}">${l}</button>`).join('')}</div>
+          <p class="hint">${LEVELS[b.level]} ${LEVEL_HELP[b.level]}. Du kan endre hver person etterpå.</p></div>
+        <label class="field"><span>3. Lim inn listen – én person per linje: navn, e-post, verv</span>
+          <textarea id="bulk-text" rows="7" placeholder="Kari Nordmann, kari@eksempel.no, Sportslig leder&#10;Ola Hansen; ola@eksempel.no; Kiosk- og dugnadsansvarlig">${esc(b.text)}</textarea></label>
+        <p class="hint">Verv er valgfritt. Flere verv skilles med «/». Verv i ${esc(unitName(b.unit))}: ${esc(roleNames || 'ingen')}. Verv fra andre enheter du er admin for finnes også, og gir tilgang der. Du kan også lime inn tre kolonner fra Excel.</p>
+        <button type="button" class="btn-secondary" data-action="bulk-check">Sjekk listen</button>
+        ${rows ? `<div class="group bulk-preview">${rows.map(r => `<div class="row bulk-row${r.error ? ' bad' : ''}">
+            <span class="avatar">${esc(initials(r.name || r.email || '?'))}</span>
+            <span class="row-text"><b>${esc(r.name || '–')}</b><small>${esc(r.email || r.line)}</small>
+              <small>${r.error ? '<span class="bulk-err">' + esc(r.error) + '</span>'
+                : (r.existing ? 'Finnes fra før – får tilgang lagt til. ' : 'Ny bruker. ') +
+                  (r.roles.length ? 'Verv: ' + r.roles.map(x => esc(x.name) + (x.unit_id !== b.unit ? ' (' + esc(unitName(x.unit_id)) + ')' : '')).join(', ') : 'Ingen verv') +
+                  ' · Tilgang: ' + r.units.map(u => esc(unitName(u))).join(', ') +
+                  (r.missing.length ? ' · <span class="bulk-err">Fant ikke vervet «' + r.missing.map(esc).join('», «') + '»</span>' : '')}</small></span></div>`).join('')}</div>
+          <button type="button" class="btn-primary wide" data-action="bulk-save"${ok.length && !b.busy ? '' : ' disabled'}>${b.busy ? 'Legger til …' : `Legg til ${ok.length} ${ok.length === 1 ? 'person' : 'personer'}`}</button>` : ''}`;
+    }
+    document.getElementById('more-content').innerHTML = `${sheetHead('Legg til flere', 'users')}<div class="task-form">${body}</div>`;
+  }
+  async function saveBulk() {
+    readBulkText();
+    bulk.rows = parseBulk(bulk.text, bulk.unit);
+    const list = bulk.rows.filter(r => !r.error);
+    if (!list.length) return renderBulk();
+    bulk.busy = true; renderBulk();
+    const result = { added: 0, updated: 0, errors: [] };
+    for (const r of list) {
+      try {
+        let id = r.existing && r.existing.id;
+        if (!id) {
+          const rows = await rest('members', { method: 'POST', body: { name: r.name, email: r.email }, prefer: 'return=representation' });
+          id = rows[0].id; result.added++;
+        } else result.updated++;
+        const rank = { reader: 1, editor: 2, admin: 3 };
+        for (const unit of r.units) {
+          const had = cloud.access.find(a => a.member_id === id && a.unit_id === unit);
+          if (!had || rank[had.level] < rank[bulk.level]) {
+            await rest('member_access', { method: 'POST', body: { member_id: id, unit_id: unit, level: bulk.level }, prefer: 'resolution=merge-duplicates,return=minimal' });
+          }
+        }
+        for (const role of r.roles) {
+          await rest('member_roles', { method: 'POST', body: { member_id: id, role_id: role.id }, prefer: 'resolution=ignore-duplicates,return=minimal' });
+        }
+      } catch (err) { result.errors.push(`${r.name || r.email}: ${err.message}`); }
+    }
+    await loadCloud();
+    bulk.busy = false; bulk.done = result; bulk.text = '';
+    renderBulk();
+    toast(`${result.added + result.updated} personer er lagt inn`);
+  }
+  function groupInvite() {
+    return [
+      'Hei!',
+      '',
+      'Du er lagt inn i Tune IL årshjul – klubbens oversikt over faste oppgaver og frister gjennom sesongen, og hvem som har ansvaret. Vi tester det fram til sommeren.',
+      '',
+      'Slik kommer du i gang:',
+      `1. Åpne ${appUrl()} på mobilen`,
+      '2. Trykk «Logg inn» og skriv e-postadressen din',
+      '3. Du får en kode på e-post (sjekk søppelpost). Skriv inn koden – du trenger ikke passord',
+      '4. Legg årshjulet på hjemskjermen, så finner du det igjen som en app',
+      '',
+      'Under ☰ → «Vis bare mine oppgaver» ser du det som gjelder ditt verv.',
+      '',
+      'Hilsen',
+      cloud && cloud.me ? cloud.me.name : 'Tune IL'
+    ].join('\n');
+  }
+
   // ---------- Verv ----------
   function renderRoles() {
     const units = (cloud.units.length ? cloud.units : D.units);
@@ -1373,6 +1494,17 @@
     if (a === 'roles') { moreView = 'roles'; renderMore(); return true; }
     if (a === 'user-open') { openUser(val); return true; }
     if (a === 'user-new') { openUser(null); return true; }
+    if (a === 'bulk-open') { bulk = { unit: D.units.map(u => u.id).find(u => myAccess(u) === 'admin') || 'handball', level: 'reader', text: bulk ? bulk.text : '', rows: null, busy: false, done: null }; moreView = 'bulk'; renderMore(); return true; }
+    if (a === 'bulk-unit') { readBulkText(); bulk.unit = val; bulk.rows = null; renderBulk(); return true; }
+    if (a === 'bulk-level') { readBulkText(); bulk.level = val; renderBulk(); return true; }
+    if (a === 'bulk-check') { readBulkText(); bulk.rows = parseBulk(bulk.text, bulk.unit); renderBulk(); return true; }
+    if (a === 'bulk-save') { saveBulk(); return true; }
+    if (a === 'bulk-copy') {
+      const text = groupInvite();
+      (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject())
+        .then(() => toast('Teksten er kopiert – lim den inn i Spond, SMS eller e-post'), () => toast('Kunne ikke kopiere – merk teksten og kopier selv'));
+      return true;
+    }
     if (a === 'user-lvl') { readUserForm(); userDraft.access[el.dataset.unit] = val; userDraft.armed = false; renderUserEdit(); return true; }
     if (a === 'user-save') { saveUser(); return true; }
     if (a === 'user-delete') { deleteUser(); return true; }
@@ -1405,6 +1537,7 @@
     if (moreView === 'users') return renderUsers();
     if (moreView === 'user') return renderUserEdit();
     if (moreView === 'roles') return renderRoles();
+    if (moreView === 'bulk') return renderBulk();
     const p = themePref();
     const nDone = Object.keys(done).length;
     const themeBtn = (val, icon, label) => `<button type="button" data-action="theme" data-theme-val="${val}" class="${p === val ? 'on' : ''}" aria-pressed="${p === val}">${ico(icon)}${label}</button>`;

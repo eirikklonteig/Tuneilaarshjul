@@ -663,6 +663,13 @@ body[data-mode="cloud"] .pill-test { display: none; }
 .badge.for-you { background: var(--accent-soft); color: var(--accent); }
 .sub-role { padding: 8px 10px !important; font-size: .86rem !important; color: var(--muted) !important; }
 
+/* ---------- Legg til flere ---------- */
+.users-tools .btn-secondary { white-space: nowrap; padding: 10px 14px; }
+.bulk-preview .row { align-items: flex-start; }
+.bulk-row.bad { background: var(--late-bg); }
+.bulk-err { color: var(--late-fg); font-weight: 600; }
+.bulk-invite { white-space: pre-wrap; font-family: inherit; font-size: .84rem; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin: 0; user-select: text; }
+
 /* ---------- Mobil ---------- */
 @media (max-width: 560px) {
   .brand h1 { font-size: 1.05rem; }
