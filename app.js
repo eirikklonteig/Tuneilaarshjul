@@ -6,7 +6,7 @@
   'use strict';
 
   const D = window.ARSHJUL_DATA;
-  const VERSION = '1.0';
+  const VERSION = '1.0.1';
 
   // Kalenderår (januar–desember). Valgt år huskes på enheten; standard er inneværende år.
   const YEAR_KEY = 'arshjul-aar';
@@ -970,11 +970,26 @@
       </div>`;
     setTimeout(() => { const el = document.getElementById(L.step === 'email' ? 'login-email' : 'login-code'); if (el) el.focus(); }, 50);
   }
+  // true/false fra databasen; null hvis spørsmålet ikke kan stilles (da sendes koden som før)
+  async function isRegistered(email) {
+    try {
+      const res = await fetch(`${SB_URL}/rest/v1/rpc/is_registered_email`, {
+        method: 'POST', headers: { apikey: SB_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ e: email })
+      });
+      if (!res.ok) return null;
+      return (await res.json()) === true;
+    } catch (err) { return null; }
+  }
   async function sendCode() {
     const input = document.getElementById('login-email');
     const email = (input ? input.value : login.email).trim().toLowerCase();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { login.msg = 'Skriv en gyldig e-postadresse.'; return renderLogin(); }
     login = { step: login.step, email, busy: true, msg: '' }; renderLogin();
+    // Bare e-postadresser som står i brukerregisteret får kode
+    if (await isRegistered(email) === false) {
+      login = { step: 'email', email, busy: false, msg: 'Vi finner ikke denne e-postadressen i årshjulet. Sjekk at den er skrevet riktig, eller be en administrator i klubben legge deg til.' };
+      return renderLogin();
+    }
     try {
       await authCall('otp', { email, create_user: true });
       login = { step: 'code', email, busy: false, msg: '' };
