@@ -38,6 +38,40 @@
     return d;
   }
 
+  // ---------- Norske helligdager ----------
+  // Offentlige høytidsdager + alle søndager. Påsken regnes ut (gregoriansk påskeformel).
+  const holidayCache = {};
+  function easter(y) {
+    const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25),
+      g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4,
+      l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451),
+      month = Math.floor((h + l - 7 * m + 114) / 31), day = ((h + l - 7 * m + 114) % 31) + 1;
+    return new Date(y, month - 1, day);
+  }
+  function holidaysOf(y) {
+    if (holidayCache[y]) return holidayCache[y];
+    const e = easter(y), add = (n) => { const d = new Date(e); d.setDate(d.getDate() + n); return iso(d); };
+    const list = {};
+    list[y + '-01-01'] = 'Første nyttårsdag';
+    list[add(-3)] = 'Skjærtorsdag'; list[add(-2)] = 'Langfredag'; list[add(0)] = 'Første påskedag'; list[add(1)] = 'Andre påskedag';
+    list[y + '-05-01'] = 'Arbeidernes dag'; list[y + '-05-17'] = 'Grunnlovsdagen';
+    list[add(39)] = 'Kristi himmelfartsdag'; list[add(49)] = 'Første pinsedag'; list[add(50)] = 'Andre pinsedag';
+    list[y + '-12-25'] = 'Første juledag'; list[y + '-12-26'] = 'Andre juledag';
+    return (holidayCache[y] = list);
+  }
+  // Navnet på helligdagen, «Søndag», eller null for en vanlig dag
+  function holiday(d) {
+    const name = holidaysOf(d.getFullYear())[iso(d)];
+    if (name) return name;
+    return d.getDay() === 0 ? 'Søndag' : null;
+  }
+  // Nærmeste dag før som ikke er helligdag (brukes når en dato er regnet ut eller flyttet)
+  function workdayBefore(d) {
+    const x = new Date(d);
+    for (let n = 0; n < 10 && holiday(x); n++) x.setDate(x.getDate() - 1);
+    return x;
+  }
+
   // Sesongens måneder og forekomster (samme regler som i appen)
   function seasonMonths(season) {
     return Array.from({ length: 12 }, (_, i) => {
@@ -56,7 +90,7 @@
         if (seen.has(t.id)) return null;
         seen.add(t.id);
         const base = due(byId[t.rel.task], seen);
-        return base ? shiftBack(base, t.rel.amount, t.rel.unit) : null;
+        return base ? workdayBefore(shiftBack(base, t.rel.amount, t.rel.unit)) : null;
       }
       return t.due ? parseDate(t.due) : null;
     }
@@ -72,7 +106,7 @@
         let d = null;
         if (base) {
           if (i === start) d = base;
-          else { const sm = months[i]; d = new Date(sm.y, sm.m - 1, Math.min(base.getDate(), new Date(sm.y, sm.m, 0).getDate())); }
+          else { const sm = months[i]; d = workdayBefore(new Date(sm.y, sm.m - 1, Math.min(base.getDate(), new Date(sm.y, sm.m, 0).getDate()))); }
         }
         out.push({ t, idx: i, month: months[i], due: d, key: step ? `${t.id}@${i}` : t.id });
       });
@@ -129,7 +163,7 @@
         out.push({
           t: { id: o.t.id, title: s.title, parentTitle: o.t.title, type: o.t.type, role: s.role, description: '' },
           idx: o.idx, month: o.month, key,
-          due: o.due ? (b ? shiftBack(o.due, b.amount, b.unit) : o.due) : null
+          due: o.due ? (b ? workdayBefore(shiftBack(o.due, b.amount, b.unit)) : o.due) : null
         });
       });
     });
@@ -200,7 +234,7 @@ ${button(opts.appUrl, 'Åpne årshjulet')}
     return r.reminders.find(x => x.key === o.key) || null;
   }
 
-  const api = { expand, forMember, sampleReminder, iso, UPCOMING_DAYS };
+  const api = { expand, forMember, sampleReminder, iso, UPCOMING_DAYS, holiday, workdayBefore, easter };
   root.ArshjulVarsel = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
@@ -269,25 +303,28 @@ async function run(req) {
   const S = settingsRow ? settingsRow.value : {};
   if (!S.aktiv && !dry) return json({ hoppet_over: 'Varsler er ikke slått på (app_settings.varsler.aktiv = false)' });
 
-  const season = { label: S.sesong, startYear: S.startAar, startMonth: S.startMaaned };
-  const q = encodeURIComponent(season.label);
+  // Kalenderår: årets oppgaver, og i desember også neste års (påminnelser for tidlige januarfrister)
+  const today = osloToday();
+  const years = [today.getFullYear()].concat(today.getMonth() === 11 ? [today.getFullYear() + 1] : []);
+  const q = years.join(',');
   const [members, access, memberRoles, roles, units, taskRows, statuses, log] = await Promise.all([
     db('members?active=is.true&select=id,email,name,is_superadmin,notify_weekly,remind_days'),
     db('member_access?select=member_id,unit_id'),
     db('member_roles?select=member_id,role_id'),
     db('roles?select=id,name,unit_id'),
     db('units?select=id,short'),
-    db(`tasks?season=eq.${q}&deleted=is.false&select=id,units,data`),
-    db(`task_status?season=eq.${q}&status=eq.done&select=task_key`),
-    db(`notification_log?season=eq.${q}&select=member_id,kind,ref`)
+    db(`tasks?season=in.(${q})&deleted=is.false&select=id,season,units,data`),
+    db(`task_status?season=in.(${q})&status=eq.done&select=season,task_key`),
+    db(`notification_log?season=in.(${q})&select=member_id,kind,ref`)
   ]);
-  const tasks = taskRows.map(r => Object.assign({}, r.data, { id: r.id, units: r.units }));
-  const done = Object.fromEntries(statuses.map(s => [s.task_key, true]));
+  const byYear = Object.fromEntries(years.map(y => [y, {
+    tasks: taskRows.filter(r => r.season === String(y)).map(r => Object.assign({}, r.data, { id: r.id, units: r.units })),
+    done: Object.fromEntries(statuses.filter(s => s.season === String(y)).map(s => [s.task_key, true]))
+  }]));
   const sent = new Set(log.map(l => `${l.member_id}|${l.kind}|${l.ref}`));
   const unitShort = Object.fromEntries(units.map(u => [u.id, u.short]));
   const roleName = id => { const r = roles.find(x => x.id === id); return r ? `${r.name} · ${unitShort[r.unit_id] || r.unit_id}` : ''; };
 
-  const today = osloToday();
   const isMonday = today.getDay() === 1;
   const week = isoWeek(today);
   const out = [];
@@ -296,13 +333,16 @@ async function run(req) {
     const roleIds = memberRoles.filter(r => r.member_id === m.id).map(r => r.role_id);
     if (!roleIds.length) continue;
     const myUnits = m.is_superadmin ? units.map(u => u.id) : access.filter(a => a.member_id === m.id).map(a => a.unit_id);
-    const plan = ArshjulVarsel.forMember({
-      member: m, roleIds, units: myUnits, tasks, done, season, today,
-      appUrl: S.appUrl, remindDays: m.remind_days || [], roleName
-    });
     const msgs = [];
-    if (plan.weekly && m.notify_weekly && (isMonday || forceWeekly)) msgs.push(Object.assign({ ref: week }, plan.weekly));
-    plan.reminders.forEach(r => msgs.push(Object.assign({ ref: r.key }, r)));
+    years.forEach((y, yi) => {
+      const plan = ArshjulVarsel.forMember({
+        member: m, roleIds, units: myUnits, tasks: byYear[y].tasks, done: byYear[y].done,
+        season: { label: String(y), startYear: y, startMonth: 1 }, today,
+        appUrl: S.appUrl, remindDays: m.remind_days || [], roleName
+      });
+      if (yi === 0 && plan.weekly && m.notify_weekly && (isMonday || forceWeekly)) msgs.push(Object.assign({ ref: week, season: String(y) }, plan.weekly));
+      plan.reminders.forEach(r => msgs.push(Object.assign({ ref: r.key, season: String(y) }, r)));
+    });
 
     for (const msg of msgs) {
       const id = `${m.id}|${msg.kind}|${msg.ref}`;
@@ -311,7 +351,7 @@ async function run(req) {
       if (!dry) {
         try {
           await sendMail(m.email, msg);
-          await db('notification_log', { method: 'POST', body: { member_id: m.id, season: season.label, kind: msg.kind, ref: msg.ref }, prefer: 'resolution=ignore-duplicates,return=minimal' });
+          await db('notification_log', { method: 'POST', body: { member_id: m.id, season: msg.season, kind: msg.kind, ref: msg.ref }, prefer: 'resolution=ignore-duplicates,return=minimal' });
           sent.add(id);
           entry.sendt = true;
         } catch (err) { entry.feil = String(err.message || err); }

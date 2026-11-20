@@ -60,25 +60,28 @@ async function run(req) {
   const S = settingsRow ? settingsRow.value : {};
   if (!S.aktiv && !dry) return json({ hoppet_over: 'Varsler er ikke slått på (app_settings.varsler.aktiv = false)' });
 
-  const season = { label: S.sesong, startYear: S.startAar, startMonth: S.startMaaned };
-  const q = encodeURIComponent(season.label);
+  // Kalenderår: årets oppgaver, og i desember også neste års (påminnelser for tidlige januarfrister)
+  const today = osloToday();
+  const years = [today.getFullYear()].concat(today.getMonth() === 11 ? [today.getFullYear() + 1] : []);
+  const q = years.join(',');
   const [members, access, memberRoles, roles, units, taskRows, statuses, log] = await Promise.all([
     db('members?active=is.true&select=id,email,name,is_superadmin,notify_weekly,remind_days'),
     db('member_access?select=member_id,unit_id'),
     db('member_roles?select=member_id,role_id'),
     db('roles?select=id,name,unit_id'),
     db('units?select=id,short'),
-    db(`tasks?season=eq.${q}&deleted=is.false&select=id,units,data`),
-    db(`task_status?season=eq.${q}&status=eq.done&select=task_key`),
-    db(`notification_log?season=eq.${q}&select=member_id,kind,ref`)
+    db(`tasks?season=in.(${q})&deleted=is.false&select=id,season,units,data`),
+    db(`task_status?season=in.(${q})&status=eq.done&select=season,task_key`),
+    db(`notification_log?season=in.(${q})&select=member_id,kind,ref`)
   ]);
-  const tasks = taskRows.map(r => Object.assign({}, r.data, { id: r.id, units: r.units }));
-  const done = Object.fromEntries(statuses.map(s => [s.task_key, true]));
+  const byYear = Object.fromEntries(years.map(y => [y, {
+    tasks: taskRows.filter(r => r.season === String(y)).map(r => Object.assign({}, r.data, { id: r.id, units: r.units })),
+    done: Object.fromEntries(statuses.filter(s => s.season === String(y)).map(s => [s.task_key, true]))
+  }]));
   const sent = new Set(log.map(l => `${l.member_id}|${l.kind}|${l.ref}`));
   const unitShort = Object.fromEntries(units.map(u => [u.id, u.short]));
   const roleName = id => { const r = roles.find(x => x.id === id); return r ? `${r.name} · ${unitShort[r.unit_id] || r.unit_id}` : ''; };
 
-  const today = osloToday();
   const isMonday = today.getDay() === 1;
   const week = isoWeek(today);
   const out = [];
@@ -87,13 +90,16 @@ async function run(req) {
     const roleIds = memberRoles.filter(r => r.member_id === m.id).map(r => r.role_id);
     if (!roleIds.length) continue;
     const myUnits = m.is_superadmin ? units.map(u => u.id) : access.filter(a => a.member_id === m.id).map(a => a.unit_id);
-    const plan = ArshjulVarsel.forMember({
-      member: m, roleIds, units: myUnits, tasks, done, season, today,
-      appUrl: S.appUrl, remindDays: m.remind_days || [], roleName
-    });
     const msgs = [];
-    if (plan.weekly && m.notify_weekly && (isMonday || forceWeekly)) msgs.push(Object.assign({ ref: week }, plan.weekly));
-    plan.reminders.forEach(r => msgs.push(Object.assign({ ref: r.key }, r)));
+    years.forEach((y, yi) => {
+      const plan = ArshjulVarsel.forMember({
+        member: m, roleIds, units: myUnits, tasks: byYear[y].tasks, done: byYear[y].done,
+        season: { label: String(y), startYear: y, startMonth: 1 }, today,
+        appUrl: S.appUrl, remindDays: m.remind_days || [], roleName
+      });
+      if (yi === 0 && plan.weekly && m.notify_weekly && (isMonday || forceWeekly)) msgs.push(Object.assign({ ref: week, season: String(y) }, plan.weekly));
+      plan.reminders.forEach(r => msgs.push(Object.assign({ ref: r.key, season: String(y) }, r)));
+    });
 
     for (const msg of msgs) {
       const id = `${m.id}|${msg.kind}|${msg.ref}`;
@@ -102,7 +108,7 @@ async function run(req) {
       if (!dry) {
         try {
           await sendMail(m.email, msg);
-          await db('notification_log', { method: 'POST', body: { member_id: m.id, season: season.label, kind: msg.kind, ref: msg.ref }, prefer: 'resolution=ignore-duplicates,return=minimal' });
+          await db('notification_log', { method: 'POST', body: { member_id: m.id, season: msg.season, kind: msg.kind, ref: msg.ref }, prefer: 'resolution=ignore-duplicates,return=minimal' });
           sent.add(id);
           entry.sendt = true;
         } catch (err) { entry.feil = String(err.message || err); }

@@ -10,10 +10,11 @@
 2. ✅ Supabase: innlogging (kode på e-post), enheter, brukerregister, tilgang og verv
 3. ✅ Oppgaver og avkrysninger i databasen, velkomstside, offentlig lenke (?offentlig), knapper etter tilgang. Gjenstår: statuser, kommentarer, søk
 4. Varsler på e-post (ukentlig + påminnelser) ferdig laget, IKKE slått på – se supabase/VARSLER.md. Kalenderabonnement senere.
-5. Klubb og fotball inn, maler, «kopier til neste sesong» (oppgaver nullstilles, datoer kan justeres), offentlig lenke
+5. ✅ Kalenderår (januar–desember) med valg av år, «Nytt år» (kopier faste oppgaver, avkrysninger nullstilles), norske helligdager: utregnede og flyttede datoer legges på nærmeste dag før. Klubbstyret 2027 i supabase/steg5-kalenderaar.sql
 
 ## Viktige valg
-- Sesongen starter i august.
+- Årshjulet følger kalenderåret (januar–desember), fordi klubbstyret og økonomien følger året.
+- Datoer som regnes ut eller kopieres til et nytt år, flyttes til nærmeste dag før hvis de havner på en helligdag eller søndag. Datoer du skriver inn selv, flyttes ikke (appen sier fra).
 - Oppgaver knyttes til **verv**, ikke personer – nye styremedlemmer arver oppgavene.
 - En oppgave kan gjelde én eller flere enheter.
 - Tilgang (admin/bruker) og verv er to forskjellige ting.

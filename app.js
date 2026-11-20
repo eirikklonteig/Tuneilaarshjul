@@ -6,7 +6,18 @@
   'use strict';
 
   const D = window.ARSHJUL_DATA;
-  const VERSION = '0.9';
+  const VERSION = '1.0';
+
+  // Kalenderår (januar–desember). Valgt år huskes på enheten; standard er inneværende år.
+  const YEAR_KEY = 'arshjul-aar';
+  const THIS_YEAR = new Date().getFullYear();
+  let chosenYear = THIS_YEAR;
+  try { const y = parseInt(localStorage.getItem(YEAR_KEY), 10); if (y >= 2024 && y <= 2100) chosenYear = y; } catch (e) { /* privat modus */ }
+  const SEED_YEAR = D.season.startYear;   // eksempeloppgavene i data.js gjelder dette året
+  D.season = { label: String(chosenYear), startYear: chosenYear, startMonth: 1 };
+  // Helligdager (fra varsel.js): datoer som regnes ut flyttes til nærmeste dag før som ikke er helligdag
+  const WD = (d) => (window.ArshjulVarsel ? window.ArshjulVarsel.workdayBefore(d) : d);
+  const HOL = (d) => (window.ArshjulVarsel ? window.ArshjulVarsel.holiday(d) : null);
   const MONTHS = ['januar', 'februar', 'mars', 'april', 'mai', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'desember'];
   const MONTHS_SHORT = ['JAN', 'FEB', 'MAR', 'APR', 'MAI', 'JUN', 'JUL', 'AUG', 'SEP', 'OKT', 'NOV', 'DES'];
   const WEEKDAYS = ['søndag', 'mandag', 'tirsdag', 'onsdag', 'torsdag', 'fredag', 'lørdag'];
@@ -17,7 +28,7 @@
 
   const REPEAT = {
     yearly:    { step: 0, label: 'Hvert år' },
-    once:      { step: 0, label: 'Bare denne sesongen' },
+    once:      { step: 0, label: 'Bare dette året' },
     quarterly: { step: 3, label: 'Hvert kvartal' },
     bimonthly: { step: 2, label: 'Annenhver måned' },
     monthly:   { step: 1, label: 'Hver måned' }
@@ -126,7 +137,7 @@
       if (seen.has(t.id)) return null;
       seen.add(t.id);
       const base = resolveDue(taskById[t.rel.task], seen);
-      return base ? shiftBack(base, t.rel.amount, t.rel.unit) : null;
+      return base ? WD(shiftBack(base, t.rel.amount, t.rel.unit)) : null;
     }
     return t.due ? parseDate(t.due) : null;
   }
@@ -149,7 +160,7 @@
           else {
             const sm = seasonMonths[i];
             const last = new Date(sm.y, sm.m, 0).getDate();
-            due = new Date(sm.y, sm.m - 1, Math.min(base.getDate(), last));
+            due = WD(new Date(sm.y, sm.m - 1, Math.min(base.getDate(), last)));
           }
         }
         occ.push({
@@ -194,7 +205,7 @@
 
   // ---------- Toppen: fremdrift og neste frister ----------
   function renderHero() {
-    document.getElementById('season-label').textContent = D.season.label;
+    renderYearSelect();
 
     const mine = occ.filter(o => matchesFilter(o.t));
     const nDone = mine.filter(o => done[o.key]).length;
@@ -397,6 +408,8 @@
     let details = '';
     if (open) {
       details += '<div class="task-details">';
+      const hol = o.due && HOL(o.due);
+      if (hol && hol !== 'Søndag') details += `<p class="hol-note">Fristen er en helligdag (${esc(hol)})</p>`;
       if (o.opens) details += `<p class="detail-due">Åpner ${fmtLong(o.opens)}<br>Frist ${fmtLong(o.due)}</p>`;
       else if (o.due) details += `<p class="detail-due">Frist ${fmtLong(o.due)}</p>`;
       else if (t.dateTbd) details += `<p class="detail-due">Dato kommer (${MONTHS[seasonMonths[o.idx].m - 1]})</p>`;
@@ -406,7 +419,7 @@
       if (t.sub && t.sub.length) {
         details += '<h4>Underoppgaver</h4><ul class="subs">' + t.sub.map((s, i) => {
           const b = subBefore(s);
-          const sd = b && o.due ? shiftBack(o.due, b.amount, b.unit) : null;
+          const sd = b && o.due ? WD(shiftBack(o.due, b.amount, b.unit)) : null;
           const key = subKey(o, s, i);
           const sDone = !!done[key];
           const whenTxt = b ? `${amountText(b.amount, b.unit)} før${sd ? ' · ca. ' + fmtShort(sd) : ''}` : '';
@@ -500,13 +513,14 @@
   // Tomt årshjul i databasen: tilby å hente oppgaver
   function emptyWheelBanner() {
     if (mode() !== 'cloud' || tasks.length) return '';
-    if (!canAddTasks()) return '<div class="banner"><b>Årshjulet er tomt</b><p>Det er ingen oppgaver her ennå. En administrator legger dem inn.</p></div>';
+    if (!canAddTasks()) return `<div class="banner"><b>Årshjulet for ${chosenYear} er tomt</b><p>Det er ingen oppgaver her ennå. En administrator legger dem inn.</p></div>`;
     const local = readJSON(TASKS_KEY, null);
     return `<div class="banner">
-      <b>Årshjulet er tomt</b>
-      <p>Start med eksempeloppgavene (NHF Region Øst, NIF og sportslig utvalg) og tilpass dem${local ? ', eller last opp oppgavene du har lagt inn på denne enheten' : ''}.</p>
+      <b>Årshjulet for ${chosenYear} er tomt</b>
+      <p>Kopier de faste oppgavene fra ${chosenYear - 1}, eller start med eksempeloppgavene (NHF Region Øst, NIF og sportslig utvalg). Datoer som havner på en helligdag, flyttes til dagen før.</p>
       <div class="banner-actions">
-        <button type="button" class="btn-primary" data-action="import" data-val="seed">Hent ${D.tasks.length} eksempeloppgaver</button>
+        <button type="button" class="btn-primary" data-action="newyear">Kopier fra ${chosenYear - 1}</button>
+        <button type="button" class="btn-secondary" data-action="import" data-val="seed">Hent ${D.tasks.length} eksempeloppgaver</button>
         ${local ? `<button type="button" class="btn-secondary" data-action="import" data-val="local">Last opp mine ${local.length} lokale</button>` : ''}
       </div>
     </div>`;
@@ -536,7 +550,7 @@
   function renderList() {
     const ti = todayIndex();
     document.getElementById('view-liste').innerHTML =
-      `<h2 class="print-title">Tune IL årshjul · sesong ${D.season.label}</h2>` +
+      `<h2 class="print-title">Tune IL årshjul ${D.season.label}</h2>` +
       seasonMonths.map((sm, i) => {
         const list = occForMonth(i);
         return `<section class="list-month${i === ti ? ' now' : ''}">
@@ -549,7 +563,7 @@
   function render() {
     const m = mode();
     document.body.dataset.mode = m;
-    document.getElementById('season-label').textContent = D.season.label;
+    renderYearSelect();
     document.body.classList.toggle('can-add', canAddTasks());
     const gate = gateHtml(m);
     document.getElementById('gate').innerHTML = gate;
@@ -847,7 +861,11 @@
   // Første gang: hent eksempeloppgavene eller de lokale oppgavene inn i databasen
   async function importTasks(source) {
     const local = readJSON(TASKS_KEY, null);
-    const list = (source === 'local' && local ? local : clone(D.tasks)).filter(t => t.units.some(canEditUnit));
+    let list = (source === 'local' && local ? local : clone(D.tasks)).filter(t => t.units.some(canEditUnit));
+    if (source === 'seed' && chosenYear !== SEED_YEAR) {
+      const n = chosenYear - SEED_YEAR, idMap = Object.fromEntries(list.map(t => [t.id, yearId(t.id, chosenYear)]));
+      list = list.map(t => shiftTask(t, n, idMap).t);
+    }
     if (!list.length) return toast('Ingen oppgaver du har lov til å legge inn.');
     try {
       await rest('tasks', { method: 'POST', body: list.map(taskToRow), prefer: 'resolution=merge-duplicates,return=minimal' });
@@ -1122,7 +1140,7 @@
     const lines = [
       `Hei ${first}!`,
       '',
-      'Du er lagt til i Tune IL årshjul – klubbens oversikt over faste oppgaver og frister gjennom sesongen, og hvem som har ansvaret.',
+      'Du er lagt til i Tune IL årshjul – klubbens oversikt over faste oppgaver og frister gjennom året, og hvem som har ansvaret.',
       '',
       `Tilgang: ${acc.join(', ') || 'kommer'}`
     ];
@@ -1385,7 +1403,7 @@
     return [
       'Hei!',
       '',
-      'Du er lagt inn i Tune IL årshjul – klubbens oversikt over faste oppgaver og frister gjennom sesongen, og hvem som har ansvaret. Vi tester det fram til sommeren.',
+      'Du er lagt inn i Tune IL årshjul – klubbens oversikt over faste oppgaver og frister gjennom året, og hvem som har ansvaret. Vi tester det fram til sommeren.',
       '',
       'Slik kommer du i gang:',
       `1. Åpne ${appUrl()} på mobilen`,
@@ -1399,6 +1417,92 @@
       cloud && cloud.me ? cloud.me.name : 'Tune IL'
     ].join('\n');
   }
+
+  // ---------- Valg av år ----------
+  function renderYearSelect() {
+    const sel = document.getElementById('year-select');
+    if (!sel) return;
+    const years = [THIS_YEAR - 1, THIS_YEAR, THIS_YEAR + 1, chosenYear].filter((y, i, a) => a.indexOf(y) === i).sort();
+    sel.innerHTML = years.map(y => `<option value="${y}"${y === chosenYear ? ' selected' : ''}>${y}</option>`).join('');
+  }
+  document.getElementById('year-select').addEventListener('change', e => {
+    try { localStorage.setItem(YEAR_KEY, e.target.value); } catch (err) { /* ignorer */ }
+    location.reload();
+  });
+
+  // ---------- Nytt år: kopier faste oppgaver fra året før ----------
+  function yearId(id, year) { return String(id).replace(/-\d{4}$/, '') + '-' + year; }
+  function shiftTask(t, n, idMap) {
+    const c = clone(t), moved = [];
+    c.id = idMap[t.id] || t.id;
+    ['due', 'opens'].forEach(k => {
+      if (!c[k]) return;
+      // Ta utgangspunkt i den opprinnelige datoen (f.eks. 1. mai), så en flytting ikke «kryper» bakover år for år
+      const orig = c[k + 'Orig'] || c[k].slice(5);
+      c[k + 'Orig'] = orig;
+      const [mm, dd] = orig.split('-').map(Number), y = parseDate(c[k]).getFullYear() + n;
+      const d = new Date(y, mm - 1, Math.min(dd, new Date(y, mm, 0).getDate()));
+      const w = WD(d);
+      if (+w !== +d) moved.push(`${fmtDay(d)} er ${HOL(d) === 'Søndag' ? 'en søndag' : 'en helligdag'} – flyttet til ${fmtDay(w)}`);
+      c[k] = isoDate(w);
+    });
+    if (c.rel) c.rel = Object.assign({}, c.rel, { task: idMap[c.rel.task] || c.rel.task });
+    if (c.prepares) c.prepares = idMap[c.prepares] || c.prepares;
+    return { t: c, moved };
+  }
+  let ny = null;
+  async function openNewYear() {
+    ny = { loading: true, rows: [], busy: false, error: '' };
+    moreView = 'newyear'; openDialog('more'); renderMore();
+    try {
+      const prev = chosenYear - 1;
+      const rows = await rest(`tasks?season=eq.${prev}&deleted=is.false&select=id,units,data`);
+      const src = rows.map(rowToTask).filter(t => t.units.some(canEditUnit));
+      const idMap = Object.fromEntries(src.map(t => [t.id, yearId(t.id, chosenYear)]));
+      const have = new Set(tasks.map(t => t.id));
+      ny.rows = src.map(t => {
+        const r = shiftTask(t, 1, idMap);
+        return { src: t, t: r.t, moved: r.moved, exists: have.has(r.t.id), on: t.repeat !== 'once' && !have.has(r.t.id) };
+      }).sort((a, b) => (resolveSort(a.t) - resolveSort(b.t)));
+    } catch (err) { ny.error = err.message; }
+    ny.loading = false; renderMore();
+  }
+  function resolveSort(t) { const d = t.due ? parseDate(t.due) : null; return d ? +d : +new Date(chosenYear, (t.month || 1) - 1, 15); }
+  function renderNewYear() {
+    const prev = chosenYear - 1;
+    const on = ny.rows.filter(r => r.on).length;
+    let body;
+    if (ny.loading) body = '<p class="empty">Henter oppgavene fra ' + prev + ' …</p>';
+    else if (ny.error) body = `<p class="form-error">Kunne ikke hente oppgavene: ${esc(ny.error)}</p>`;
+    else if (!ny.rows.length) body = `<p class="empty">Det finnes ingen oppgaver i ${prev} som du kan kopiere.</p>`;
+    else body = `
+      <p class="hint pad-x">Velg hvilke oppgaver som skal være med i ${chosenYear}. Datoene flyttes ett år fram, og havner en dato på en helligdag eller søndag, flyttes den til nærmeste dag før. Avkrysninger tas ikke med. Oppgaver merket «Bare dette året» er ikke valgt.</p>
+      <div class="ny-tools"><button type="button" class="btn-small" data-action="ny-all" data-val="1">Velg alle</button><button type="button" class="btn-small" data-action="ny-all" data-val="0">Velg ingen</button></div>
+      <div class="group">${ny.rows.map((r, i) => {
+        const d = r.t.due ? parseDate(r.t.due) : null;
+        const when = d ? fmtDay(d) : (r.t.dateTbd ? 'dato kommer · ' : 'i løpet av ') + MONTHS[(r.t.month || 1) - 1];
+        return `<label class="row ny-row${r.on ? '' : ' off'}">
+          <input type="checkbox" data-ny="${i}"${r.on ? ' checked' : ''}>
+          <span class="row-text"><b>${esc(r.t.title)}</b><small>${esc(when)} · ${esc(roleLabel(r.t.role))}${r.src.repeat === 'once' ? ' · bare dette året' : ''}${r.exists ? ' · finnes allerede i ' + chosenYear : ''}</small>
+          ${r.moved.length ? `<small class="ny-moved">${esc(r.moved.join('; '))}</small>` : ''}</span></label>`;
+      }).join('')}</div>
+      <button type="button" class="btn-primary wide" data-action="ny-save"${on && !ny.busy ? '' : ' disabled'}>${ny.busy ? 'Kopierer …' : `Kopier ${on} ${on === 1 ? 'oppgave' : 'oppgaver'} til ${chosenYear}`}</button>`;
+    document.getElementById('more-content').innerHTML = `${sheetHead('Nytt år: ' + chosenYear, 'main')}<div class="task-form">${body}</div>`;
+  }
+  async function saveNewYear() {
+    const list = ny.rows.filter(r => r.on).map(r => r.t);
+    if (!list.length) return;
+    ny.busy = true; renderNewYear();
+    try {
+      await rest('tasks', { method: 'POST', body: list.map(taskToRow), prefer: 'resolution=merge-duplicates,return=minimal' });
+      await loadTasks();
+      closeDialog('more'); render();
+      toast(`${list.length} oppgaver er kopiert til ${chosenYear}`);
+    } catch (err) { ny.busy = false; ny.error = err.message; renderNewYear(); }
+  }
+  document.getElementById('more').addEventListener('change', e => {
+    if (e.target.dataset.ny !== undefined && ny) { ny.rows[Number(e.target.dataset.ny)].on = e.target.checked; renderNewYear(); }
+  });
 
   // ---------- Verv ----------
   function renderRoles() {
@@ -1499,6 +1603,9 @@
     if (a === 'bulk-level') { readBulkText(); bulk.level = val; renderBulk(); return true; }
     if (a === 'bulk-check') { readBulkText(); bulk.rows = parseBulk(bulk.text, bulk.unit); renderBulk(); return true; }
     if (a === 'bulk-save') { saveBulk(); return true; }
+    if (a === 'newyear') { openNewYear(); return true; }
+    if (a === 'ny-all') { ny.rows.forEach(r => { r.on = val === '1'; }); renderNewYear(); return true; }
+    if (a === 'ny-save') { saveNewYear(); return true; }
     if (a === 'bulk-copy') {
       const text = groupInvite();
       (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject())
@@ -1538,6 +1645,7 @@
     if (moreView === 'user') return renderUserEdit();
     if (moreView === 'roles') return renderRoles();
     if (moreView === 'bulk') return renderBulk();
+    if (moreView === 'newyear') return renderNewYear();
     const p = themePref();
     const nDone = Object.keys(done).length;
     const themeBtn = (val, icon, label) => `<button type="button" data-action="theme" data-theme-val="${val}" class="${p === val ? 'on' : ''}" aria-pressed="${p === val}">${ico(icon)}${label}</button>`;
@@ -1574,7 +1682,7 @@
           ${canAddTasks() ? row('plus', 'Ny oppgave', 'Legg til en oppgave i årshjulet', { action: 'new' }) : ''}
           ${mode() === 'cloud' ? row('link', 'Kopier offentlig lenke', 'Viser bare oppgaver merket «Vis på offentlig lenke» – uten innlogging', { action: 'share-public' }) : ''}
           ${canTick() ? row('cal', 'Last ned kalenderfil', 'Fristene som passer filteret nå, som .ics-fil', { action: 'ics' }) : ''}
-          ${canTick() ? row('print', 'Skriv ut / lagre som PDF', 'Hele sesongen som liste', { action: 'print' }) : ''}
+          ${canTick() ? row('print', 'Skriv ut / lagre som PDF', 'Hele året som liste', { action: 'print' }) : ''}
           ${canTick() ? row('save', 'Last ned sikkerhetskopi', 'Alle oppgaver og avkrysninger som fil', { action: 'backup' }) : ''}
           ${mode() === 'local' ? row('reset', armed === 'reset-done' ? 'Trykk igjen for å nullstille' : 'Nullstill avkrysninger', nDone ? `${nDone} avkrysset på denne enheten` : 'Ingen avkrysninger ennå', { action: 'reset-done', danger: true }) : ''}
           ${mode() === 'local' && customized ? row('trash', armed === 'reset-tasks' ? 'Trykk igjen – endringene dine slettes' : 'Tilbakestill til eksempeloppgavene', 'Fjerner oppgavene du har lagt til eller endret', { action: 'reset-tasks', danger: true }) : ''}
@@ -1590,7 +1698,7 @@
               row('tag', 'Verv', 'Opprett, endre navn eller skjul verv', { action: 'roles' })
             : row('users', 'Brukere og tilgang', 'For administratorer – logg inn først', { soon: 'Admin' }) +
               row('tag', 'Verv', 'For administratorer – logg inn først', { soon: 'Admin' })}
-          ${row('copy', 'Ny sesong', 'Velg hvilke faste oppgaver som skal være med – avkrysninger nullstilles', { soon: 'Steg 5' })}
+          ${canAddTasks() ? row('copy', 'Nytt år', `Kopier faste oppgaver fra ${chosenYear - 1} til ${chosenYear} – datoer på helligdager flyttes til dagen før`, { action: 'newyear' }) : ''}
         </div>
       </section>
 
@@ -1598,7 +1706,7 @@
         <h3>Brukerveiledning</h3>
         <div class="group guide">
           ${guide('Slik leser du hjulet', `<ul>
-            <li>Hjulet starter i august, som håndballsesongen.</li>
+            <li>Hjulet viser ett kalenderår, fra januar til desember. Bytt år øverst.</li>
             <li>Hver prikk er en oppgave. Fargen viser typen: frist, møte, arrangement, dugnad eller rutine.</li>
             <li>Den røde streken viser hvor vi er i året i dag.</li>
             <li>Ringen i midten fylles etter hvert som månedens oppgaver krysses av.</li></ul>`)}
@@ -1627,7 +1735,7 @@
         <h3>Om</h3>
         <div class="group about">
           <div><b>Tune IL årshjul</b> · testversjon ${VERSION}</div>
-          <div>Frister fra NHF Region Øst og NIF må sjekkes hver sesong.</div>
+          <div>Frister fra NHF Region Øst og NIF må sjekkes hvert år.</div>
           <div>Oppgaver og avkrysninger lagres i klubbens database og deles med alle som har tilgang.</div>
         </div>
       </section>`;
@@ -1650,6 +1758,12 @@
   let formError = '';
   let deleteArmed = false;
 
+  // Advarsel i skjemaet når en valgt dato er en helligdag
+  function holHint(s) {
+    if (!s) return '';
+    const d = parseDate(s), h = HOL(d);
+    return h && h !== 'Søndag' ? `Merk: ${fmtDay(d)} er en helligdag (${h}).` : h === 'Søndag' ? `Merk: ${fmtDay(d)} er en søndag.` : '';
+  }
   function newId() { return 'o' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
 
   function draftFromTask(t) {
@@ -1708,13 +1822,13 @@
     const repeatLocked = d.kind === 'rel' || d.kind === 'period';
 
     let when = '';
-    if (d.kind === 'date') when = `<label class="field"><span>Frist</span><input type="date" data-field="due" value="${esc(d.due)}" min="${min}" max="${max}"></label>`;
+    if (d.kind === 'date') when = `<label class="field"><span>Frist</span><input type="date" data-field="due" value="${esc(d.due)}" min="${min}" max="${max}"></label><p class="hint hol-hint" id="hol-hint">${holHint(d.due)}</p>`;
     if (d.kind === 'month' || d.kind === 'tbd') when = `<label class="field"><span>Måned</span><select data-field="month">${monthOpts}</select></label>
       <p class="hint">${d.kind === 'tbd' ? 'Vises med «?» til datoen er kjent. Rediger oppgaven og velg «Dato» når den kommer.' : 'Oppgaven gjøres en gang i løpet av måneden.'}</p>`;
     if (d.kind === 'period') when = `<div class="field-row">
         <label class="field"><span>Åpner</span><input type="date" data-field="opens" value="${esc(d.opens)}" min="${min}" max="${max}"></label>
         <label class="field"><span>Frist</span><input type="date" data-field="due" value="${esc(d.due)}" min="${min}" max="${max}"></label></div>
-      <p class="hint">For eksempel dommerpåmelding: åpner 1. april, frist 1. mai.</p>`;
+      <p class="hint hol-hint" id="hol-hint">${holHint(d.due)}</p><p class="hint">For eksempel dommerpåmelding: åpner 1. april, frist 1. mai.</p>`;
     if (d.kind === 'rel') when = `<div class="field-row rel-row">
         <label class="field narrow"><span>Antall</span><input type="number" min="0" max="365" inputmode="numeric" data-field="relAmount" value="${esc(d.relAmount)}"></label>
         <label class="field narrow"><span>&nbsp;</span>${unitSel('relUnit', d.relUnit)}</label>
@@ -1747,7 +1861,7 @@
           ${when}
           <label class="field"><span>Gjentas</span>
             <select data-field="repeat"${repeatLocked ? ' disabled' : ''}>${Object.entries(REPEAT).map(([k, r]) => `<option value="${k}"${k === (repeatLocked ? 'yearly' : d.repeat) ? ' selected' : ''}>${r.label}</option>`).join('')}</select></label>
-          <p class="hint">${repeatLocked ? 'Perioder og frister før en annen oppgave gjentas hvert år.' : '«Hvert år» og «hver måned» o.l. tas med til neste sesong. «Bare denne sesongen» gjør ikke det.'}</p>
+          <p class="hint">${repeatLocked ? 'Perioder og frister før en annen oppgave gjentas hvert år.' : '«Hvert år» og «hver måned» o.l. tas med når neste år kopieres. «Bare dette året» gjør ikke det. Gjentatte datoer som havner på en helligdag, flyttes til dagen før.'}</p>
         </fieldset>
 
         <label class="field"><span>Beskrivelse</span><textarea data-field="description" rows="3" placeholder="Hva skal gjøres, og hvordan?">${esc(d.description)}</textarea></label>
@@ -1807,6 +1921,7 @@
     if (!draft) return;
     const el = e.target;
     if (el.dataset.field) draft[el.dataset.field] = el.value;
+    if (el.dataset.field === 'due') { const h = document.getElementById('hol-hint'); if (h) h.textContent = holHint(el.value); }
     if (el.dataset.check) draft[el.dataset.check] = el.checked;
     if (el.dataset.sub !== undefined) draft.sub[Number(el.dataset.sub)][el.dataset.key] = el.value;
     if (el.dataset.link !== undefined) draft.links[Number(el.dataset.link)][el.dataset.key] = el.value;
@@ -1827,13 +1942,13 @@
     const t = { id: d.id || newId(), title, type: d.type, units: D.units.map(u => u.id).filter(u => d.units.includes(u)), role: d.role };
     if (d.description.trim()) t.description = d.description.trim();
     if (d.kind === 'date') {
-      if (!inSeason(d.due)) return fail(`Velg en dato i sesongen (${range}).`);
+      if (!inSeason(d.due)) return fail(`Velg en dato i året (${range}).`);
       t.due = d.due;
     } else if (d.kind === 'month' || d.kind === 'tbd') {
       t.month = Number(d.month);
       if (d.kind === 'tbd') t.dateTbd = true;
     } else if (d.kind === 'period') {
-      if (!inSeason(d.opens) || !inSeason(d.due)) return fail(`Velg både åpner- og fristdato i sesongen (${range}).`);
+      if (!inSeason(d.opens) || !inSeason(d.due)) return fail(`Velg både åpner- og fristdato i året (${range}).`);
       if (d.opens > d.due) return fail('Åpner-datoen må være før fristen.');
       t.opens = d.opens; t.due = d.due;
     } else if (d.kind === 'rel') {
@@ -1844,7 +1959,7 @@
       t.prepares = d.relTask;
       const base = resolveDue(taskById[d.relTask]);
       const due = base ? shiftBack(base, amount, d.relUnit) : null;
-      if (!due || due < seasonStart) return fail('Fristen havner før sesongstart. Velg kortere tid.');
+      if (!due || due < seasonStart) return fail('Fristen havner før årets start. Velg kortere tid, eller legg oppgaven i fjoråret.');
       t.month = due.getMonth() + 1;
     }
     if (d.kind !== 'rel' && d.kind !== 'period' && d.repeat !== 'yearly') t.repeat = d.repeat;

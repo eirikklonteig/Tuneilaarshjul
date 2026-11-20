@@ -709,3 +709,18 @@ body[data-mode="cloud"] .pill-test { display: none; }
   .task-list { gap: 4px; }
   .empty { padding: 4px; text-align: left; border: 0; }
 }
+
+/* ---------- Kalenderår og helligdager ---------- */
+.year-select {
+  appearance: none; -webkit-appearance: none; font: inherit; font-weight: 700; color: var(--hero-text);
+  background: var(--glass) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2398a9a1' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 8px center / 12px;
+  border: 1px solid var(--glass-border); border-radius: 999px; padding: 2px 26px 2px 10px; font-size: .86rem; cursor: pointer;
+}
+.hol-note { color: var(--soon-fg); background: var(--soon-bg); padding: 6px 10px; border-radius: 10px; font-weight: 600; font-size: .82rem; justify-self: start; }
+.hol-hint:empty { display: none; }
+.hol-hint { color: var(--soon-fg); font-weight: 600; }
+.ny-tools { display: flex; gap: 8px; }
+.ny-row { align-items: flex-start; cursor: pointer; }
+.ny-row input { margin-top: 4px; accent-color: var(--green); width: 18px; height: 18px; flex: none; }
+.ny-row.off { opacity: .55; }
+.ny-moved { color: var(--soon-fg) !important; font-weight: 600; }
