@@ -724,3 +724,12 @@ body[data-mode="cloud"] .pill-test { display: none; }
 .ny-row input { margin-top: 4px; accent-color: var(--green); width: 18px; height: 18px; flex: none; }
 .ny-row.off { opacity: .55; }
 .ny-moved { color: var(--soon-fg) !important; font-weight: 600; }
+
+/* ---------- Varsler som nedtrekksmeny ---------- */
+.drop > summary { list-style: none; cursor: pointer; border-top: 1px solid var(--border); }
+.drop > summary::-webkit-details-marker { display: none; }
+.drop > summary:hover { background: var(--surface-2); }
+.drop-chev { transition: transform .2s; }
+.drop[open] .drop-chev { transform: rotate(180deg); }
+.drop[open] > summary { background: var(--surface-2); }
+.group > .drop:first-child > summary { border-top: 0; }

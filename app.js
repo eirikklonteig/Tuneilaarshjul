@@ -6,7 +6,7 @@
   'use strict';
 
   const D = window.ARSHJUL_DATA;
-  const VERSION = '1.0.1';
+  const VERSION = '1.0.2';
 
   // Kalenderår (januar–desember). Valgt år huskes på enheten; standard er inneværende år.
   const YEAR_KEY = 'arshjul-aar';
@@ -1079,9 +1079,18 @@
     if (!notify) return `<div class="group">${row('mail', 'E-postvarsler', notifyError === 'oppsett'
       ? 'Varsler er ikke lagt inn i databasen ennå (supabase/steg4-varsler.sql).' : 'Kunne ikke hente innstillingene: ' + esc(notifyError), { soon: 'Kommer' })}</div>`;
     const hasRoles = myRoleIds().length > 0;
+    const days = notify.days.slice().sort((a, b) => b - a);
+    const summary = [notify.weekly ? 'Ukentlig e-post på' : 'Ukentlig e-post av',
+      days.length ? 'påminnelse ' + days.join(', ') + (days.length === 1 && days[0] === 1 ? ' dag' : ' dager') + ' før' : 'ingen påminnelser'].join(' · ');
     return `<div class="group">
-      ${notify.active ? '' : `<div class="notice">Varsler er <b>ikke slått på ennå</b>. Innstillingene dine lagres og brukes når de slås på. Se forhåndsvisningen for hvordan e-postene blir.</div>`}
+      ${notify.active ? '' : `<div class="notice">Varsler er <b>ikke slått på ennå</b>. Innstillingene dine lagres og brukes når de slås på.</div>`}
       ${hasRoles ? '' : `<div class="notice">Du har ingen verv ennå, så du får ingen varsler. En administrator kan gi deg verv.</div>`}
+      <details class="drop" id="notify-drop"${notifyOpen ? ' open' : ''}>
+      <summary class="row">
+        <span class="row-icon">${ico('bell')}</span>
+        <span class="row-text"><b>Varselinnstillinger</b><small>${esc(summary)}</small></span>
+        <svg class="chev drop-chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+      </summary>
       <button type="button" class="row" data-action="notify-weekly" role="switch" aria-checked="${notify.weekly}">
         <span class="row-icon">${ico('mail')}</span>
         <span class="row-text"><b>Ukentlig e-post</b><small>Hver mandag: dine frister de neste ${window.ArshjulVarsel ? ArshjulVarsel.UPCOMING_DAYS : 30} dagene og det som ikke er krysset av. Sendes bare når det er noe å vise.</small></span>
@@ -1095,8 +1104,12 @@
       </div>
       ${row('star', 'Forhåndsvis e-postene', 'Se hvordan den ukentlige e-posten og en påminnelse vil se ut for deg', { action: 'preview-mail' })}
       ${row('link', 'Abonner i kalenderen', 'Fristene dine i Outlook, Google eller iPhone-kalenderen', { soon: 'Senere' })}
+      </details>
     </div>`;
   }
+  // Huske om varselmenyen er åpen når panelet tegnes på nytt
+  let notifyOpen = false;
+  document.addEventListener('toggle', e => { if (e.target && e.target.id === 'notify-drop') notifyOpen = e.target.open; }, true);
 
   // Forhåndsvisning: samme innhold som sendejobben lager
   function previewFor(memberId, tab) {
